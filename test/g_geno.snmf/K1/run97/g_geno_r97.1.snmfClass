@@ -1,0 +1,5 @@
+new("snmfClass", directory = "K1/run97/", snmfClass.file = "g_geno_r97.1.snmfClass", 
+    K = 1L, run = 97L, CPU = 1L, seed = 1333145645L, alpha = 10, 
+    percentage = 0.05, I = 0L, iterations = 1000000L, entropy = TRUE, 
+    tolerance = 1e-05, crossEntropy = 0.292506559886734, ploidy = 2L, 
+    Q.input.file = "", Q.output.file = "g_geno_r97.1.Q", G.output.file = "g_geno_r97.1.G")
