@@ -1,3 +1,4 @@
+# get libraries
 library(adegenet)
 library(dartR)
 library(LEA)
@@ -5,20 +6,21 @@ library(vcfR)
 library(poppr)
 
 # Fri Apr 18 09:02:59 2025 ------------------------------
-setwd("C:/Users/jpark107/genetics/phylogeny2/phylogeny_filter/phylogeny_all/")
-
-
-setwd("C:/Users/jpark107/OneDrive - University of Tennessee/Desktop/Genetics_swo/hybridization paper")
+# navigate to folder that contains the STACKS "populations.snps.vcf" file output from the populations module
+setwd("Quercus_bicolor/data/STACKS/PopulationsAllSpecies/")
 
 vc<-read.vcfR("populations.snps.vcf")
 g<-vcfR2genlight(vc)
 g<-gl.compliance.check(g)
 names<-g@ind.names
+setwd("Quercus_bicolor/data/")
 pops<-read.csv("Qbicolor_161_pops.csv", header=TRUE)
 pop<-pops$pop %>% as.factor()
 g@pop<-pop
 
-#PCA plotting
+
+
+# Part 1: PCA plotting
 library(ggplot2)
 library(ggrepel)
 library(dplyr)
@@ -43,7 +45,7 @@ color_palette <- viridis(29, option='turbo')
 # Select one representative per population for labeling
 pca_labels <- pca_df %>%
   group_by(Population) %>%
-  slice(1)  # Take the first occurrence per population
+  slice(1)  
 
 # Merge to get label positions for each point
 pca_df <- pca_df %>%
@@ -105,8 +107,10 @@ final_plot <- ggdraw() +
 final_plot
 
 
-#run sNMF in LEA
-setwd("C:/Users/jpark107/OneDrive - University of Tennessee/Desktop/Genetics_swo/hybridization paper/test")
+
+
+# Part 2: run sNMF in LEA
+setwd("Quercus_bicolor/data/)
 gl2geno(g, outfile= "g_geno",outpath= getwd())
 names<-g@ind.names
 pop<-pops$pop
@@ -127,19 +131,19 @@ q$V4<-as.numeric(q$V4)
 q$pure<-q$V4>0.84
 write.csv(q,"qscores_k5.csv")
 
-#make txt file for STACKS populations with pure individuals
+#make txt file for STACKS populations with pure individuals for analysis in Part 4
 pure<-q[q$pure==TRUE,]
 #remove reference samples
 pure<-pure[pure$pop!='Ref. Sample-Q. bicolor',1:2]
+setwd("Quercus_bicolor/data/")
 write.table(pure, "pure.txt", sep="\t", row.names=FALSE, col.names=FALSE, quote=FALSE)
-#then run STACKS externally
-stacks-2.68/populations --in-path ./phylogeny2/ --popmap ./data/popmap4_swopure111.txt --out-path ./phylogeny2/phylogeny_filter/swopure/111pops -R 0.95 --min-gt-depth 5 --min-mac 3 --genepop --structure --ordered-export --write-single-snp
+#then run STACKS externally (from inside "Quercus_bicolor" directory): $$ stacks-2.68/populations --in-path ./data/STACKS/ --popmap ./data/pure.txt --out-path ./data/STACKS/PopulationsOnlyPureQbicolor/ -R 0.95 --min-gt-depth 5 --min-mac 3 --genepop --structure --ordered-export --write-single-snp
 
 
-#assess heterozygosity, etc. relative to Q. bicolor ancestry proportion (V4)
+
+# Part 3: assess heterozygosity, etc. relative to Q. bicolor ancestry proportion (V4)
 #get STACKS output for just the Qbicolor samples (exclude reference samples and those with higher missing data)
-setwd("C:/Users/jpark107/OneDrive - University of Tennessee/Desktop/Genetics_swo/hybridization paper/test")
-setwd("C:/Users/jpark107/genetics/phylogeny2/phylogeny_filter/phylogeny_all/135")
+setwd("Quercus_bicolor/data/STACKS/PopulationsOnlyQbicolorAndHybrids/")
 vc<-read.vcfR("populations.snps.vcf")
 g<-vcfR2genlight(vc)
 g<-gl.compliance.check(g)
@@ -235,8 +239,6 @@ plot<-ggplot(merged_data_fil, aes(x = V4, y = FIS)) +
 )
 plot
 
-
-
 #regression of average pairwise Fst values
 mod <- betareg::betareg(pairwise_means ~ V4, data = merged_data_fil, link = "logit")
 # Extract design matrix (n × p)
@@ -266,9 +268,6 @@ plot<-ggplot(merged_data_fil, aes(x = V4, y = pairwise_means)) +
            size = 3, family = "mono", color="black")
 )
 plot
-
-
-
 
 #also get by individual observed heterozygosity
 het<-gl.report.heterozygosity(g, method='ind')
@@ -313,7 +312,7 @@ plot<-ggplot(merged_data_ind, aes(x = V4, y = Ho)) +
 plot
 
 
-#Dsuite
+# convert raw Dsuite Dinvestigate output to dataframe
 # get file from Dsuite Dinvestigate
 "C:\Users\jpark107\genetics\data\dinvestigate1_output.txt"
 setwd("C:/Users/jpark107/genetics/data")
@@ -446,9 +445,8 @@ range(df$D[df$pop2=="CORE"])
 
 
 
-#load dataset only including "pure" Q. bicolor
-setwd("C:/Users/jpark107/genetics/phylogeny2/phylogeny_filter/swopure/allpops/vcf")
-setwd("C:/Users/jpark107/OneDrive - University of Tennessee/Desktop/Genetics_swo/hybridization paper")
+# Part 4: assess GD, IBD, AMOVA only including "pure" Q. bicolor
+setwd("Quercus_bicolor/data/STACKS/PopulationsOnlyPureQbicolor/")
 vc<-read.vcfR("populations.snps.vcf")
 g<-vcfR2genlight(vc)
 g<-gl.compliance.check(g)
