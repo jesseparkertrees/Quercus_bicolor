@@ -11,7 +11,7 @@ Sequence reads available at: SRR____________
 
 DESCRIPTION OF FILES IN main directory
 File: "hybridization_MS_script.qmd"
-Description: Quarto file containing code for all analyses. Code chunks that should be implemented in the command line are preceded with "``` {.bash eval= FALSE}", while those to be run in R are preceded with "``` {r eval= FALSE}". This script is not directly executable, as it requires prior generation of intermediate files across multiple platforms and the download of sequence reads from the SRA. 
+Description: Quarto file containing code for all analyses. Code chunks that should be implemented in the command line are preceded with "{.bash eval= FALSE}", while those to be run in R are preceded with "{r eval= FALSE}". This script is not directly executable, as it requires prior generation of intermediate files across multiple platforms and the download of sequence reads from the SRA. 
 
 File: "hybridization_MS_script.html"
 Description: HTML rendering of the .qmd file of the same name
