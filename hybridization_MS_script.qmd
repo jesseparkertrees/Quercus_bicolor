@@ -1,0 +1,1448 @@
+---
+title: "hybridization_MS_script"
+author: "Jesse Parker"
+format: 
+  html:
+    toc: true
+    embed-resources: false
+---
+
+### Set-up: copy GitHub "Quercus_bicolor" repository to home directory
+
+# I. Processing raw RADseq data...command line
+
+## (samples available on the SRA are already demultiplexed)
+
+#### 1. Create directories
+
+``` {.bash eval=FALSE}
+setwd("~/Quercus_bicolor/")
+mkdir reference
+mkdir demultiplexed
+mkdir align
+mkdir gstacks_out
+```
+
+#### 2. Run STACKS process_radtags on raw data (make sure you have STACKS installed in working directory). can skip this step as reads available from SRA are already demultiplexed
+
+``` {.bash eval=FALSE}
+stacks-2.68/process_radtags -P -p ./data/run_1/ -o ./demultiplexed/ -b ./data/C1591A_barcodes.tsv  -e pstI -r --inline-null -c -q
+
+stacks-2.68/process_radtags -P -p ./data/run_2/ -o ./demultiplexed/ -b ./data/C1591B_barcodes.tsv  -e pstI -r --inline-null -c -q
+```
+
+#### 3. Download (using SRA toolkit...must be installed) and index reference genome (first load BWA with conda)
+
+``` {.bash eval=FALSE}
+cd reference
+datasets download genome accession GCA_036321655.1 --include genome
+cd ..
+bwa index ./reference/GCA_036321655.1_ASM3632165v1_genomic.fna.gz
+```
+
+#### 4. Create script to iterate through samples and align to reference genome
+
+``` {.bash eval=FALSE}
+nano align_samples.sh
+```
+
+##### Modify script with the following:
+
+``` {.bash eval= FALSE}
+#!/bin/bash
+REF="./reference/GCA_036321655.1_ASM3632165v1_genomic.fna.gz"
+#Create an array of sample names (removes .1.fq.gz suffix)
+INDS=($(for i in ./demultiplexed/*.1.fq.gz; do echo $(basename ${i%.1.fq.gz}); done))
+#Print the list of sample names
+echo "INDS array contents: ${INDS[@]}"
+#Loop through each sample and set the variables
+for IND in ${INDS[@]};
+do
+        # Declare file paths for forward and reverse reads, and output BAM file
+        FORWARD=./demultiplexed/samples/${IND}.1.fq.gz
+        REVERSE=./demultiplexed/samples/${IND}.2.fq.gz
+        OUTPUT=./align/${IND}_sort.bam
+        echo "Aligning $IND with bwa"
+        bwa mem -t 4 $REF $FORWARD $REVERSE | samtools view -b | samtools sort -T ${IND} > $OUTPUT
+done
+```
+
+##### Run script with:
+
+``` {.bash eval= FALSE}
+bash align_samples.sh
+```
+
+##### Repeat for reference samples, modifying as necessary
+
+#### 5. Run the STACKS gstacks module on all aligned samples
+
+``` {.bash eval= FALSE}
+stacks-2.68/gstacks -I ./align/ -M ./data/popmap_gstacks.txt --min-mapq 30 -O ./gstacks_out/ -t 8
+```
+
+#### 6. Run the STACKS populations module
+
+``` {.bash eval="false"}
+mkdir gstacks_out/dataset1
+stacks-2.68/populations --in-path ./gstacks_out/ --popmap ./data/popmap_dataset1.txt --out-path ./data/STACKS/dataset1 -R 0.95 --min-gt-depth 5 --min-mac 3 --vcf --structure --ordered-export --write-single-snp
+
+stacks-2.68/populations --in-path ./gstacks_out/ --popmap ./data/popmap_dataset2.txt --out-path ./data/STACKS/dataset2 -R 0.95 --min-gt-depth 5 --min-mac 3 --vcf --structure --ordered-export --write-single-snp
+
+stacks-2.68/populations --in-path ./gstacks_out/ --popmap ./data/popmap_dataset2.txt --out-path ./data/STACKS/dataset2_NoMissing/ -R 1 --min-gt-depth 5 --min-mac 3 --vcf --ordered-export --write-single-snp
+```
+
+##### You now have three .vcf files of filtered SNPs that can be used for further analyses in R. One includes all the species (dataset1), another only includes Q.bicolor and Q.lyrata (dataset2) with 0.95 call rate, and the third only includes Q.bicolor and Q.lyrata (dataset2) with 1 call rate
+
+# II. Assessing Hybridization (in R)
+
+## Composed of three main parts: PCA (using dartR package), sNMF (using LEA package), and Dsuite
+
+```{r eval= FALSE}
+setwd("~/Quercus_bicolor/")
+```
+
+#### Load .vcf file from STACKS populations and add population names
+
+```{r eval=FALSE}
+library(adegenet)
+library(dartR)
+library(LEA)
+library(vcfR)
+library(poppr)
+library(dplyr)
+vc<-read.vcfR("./data/STACKS/dataset1/populations.snps.vcf")
+g<-vcfR2genlight(vc)
+g<-gl.compliance.check(g)
+names<-g@ind.names
+pops<-read.csv("Qbicolor_161_pops.csv", header=TRUE)
+pop<-pops$pop %>% as.factor()
+g@pop<-pop
+```
+
+## Perform principal components analysis and visualize
+
+```{r eval= FALSE}
+library(ggplot2)
+library(ggrepel)
+library(dplyr)
+library(cowplot) 
+# Perform PCA
+pca <- glPca(g, center=TRUE, scale=TRUE)
+#for all samples, keep 7
+barplot(pca$eig, main="eigenvalues", col=heat.colors(length(pca$eig)))
+# Create a dataframe for plotting
+pca_df <- data.frame(
+  PC1 = pca$scores[,1],
+  PC2 = pca$scores[,2],
+  Population = as.factor(pop(g))  # Population as categorical variable
+)
+levels(pca_df[,3]) <- c(levels(pca_df[,3]), "Sample (outlier)")
+# Now you can assign it
+pca_df[1,3] <- "Sample (outlier)"
+
+# Define the color palette
+library('viridis')
+color_palette <- viridis(29, option='turbo') 
+# Select one representative per population for labeling
+pca_labels <- pca_df %>%
+  group_by(Population) %>%
+  slice(1)  # Take the first occurrence per population
+
+# Merge to get label positions for each point
+pca_df <- pca_df %>%
+  left_join(pca_labels, by = "Population", suffix = c("", "_label"))
+
+# Variance explained (percentages for axis labels)
+var_exp1 <- round(100 * pca$eig[1] / sum(pca$eig), 2)
+var_exp2 <- round(100 * pca$eig[2] / sum(pca$eig), 2)
+pca_plot <- ggplot(pca_df, aes(x = PC1, y = PC2, color = Population)) +
+  #geom_segment(aes(x = PC1_label, y = PC2_label, xend = PC1, yend = PC2), 
+  #             color = "gray50", alpha = 0.5, linetype = "dotted") +  
+  geom_point(size = 4, alpha = 0.8) +  
+  geom_text_repel(
+    data = pca_labels,
+    aes(label = Population),
+    size = 5,
+    family = "mono",
+    max.overlaps = Inf,
+    nudge_x = 0.01 * (max(pca_df$PC1) - min(pca_df$PC1)),  
+    nudge_y = 0.01 * (max(pca_df$PC2) - min(pca_df$PC2)),  
+    force = 2,  
+    segment.size = 0.7,  
+    box.padding = 1.2,
+    show.legend = FALSE
+  ) +
+  scale_color_manual(values = color_palette) +  
+  theme_minimal() +  
+  theme(panel.grid.major = element_line(color = "gray85", size = 0.1),  # Lighter major grid lines
+        panel.grid.minor = element_line(color = "gray92", size = 0.1))+  
+  theme(
+    text = element_text(family = "mono", size = 18, color='black'),  
+    legend.position = "right"
+  ) +
+  labs(
+    title = "PCA of SNP data, Dataset 3",
+    x = paste0("PC1 (", var_exp1, "% variance)"),
+    y = paste0("PC2 (", var_exp2, "% variance)")
+  ) +
+  theme(legend.title = element_blank())  
+
+# Scree Plot (Eigenvalues Barplot)
+scree_df <- data.frame(PC = 1:length(pca$eig), Eigenvalue = pca$eig)
+scree_plot <- ggplot(scree_df, aes(x = PC, y = Eigenvalue)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  theme_minimal() +
+  theme(panel.grid.major = element_line(color = "gray85", size = 0),  # Lighter major grid lines
+        panel.grid.minor = element_line(color = "gray92", size = 0))+  
+  xlim(0,50)+
+  labs(title = "Scree Plot", x = "Principal Component", y = "Eigenvalue") +
+  theme(
+    plot.title = element_text(size = 10, hjust = 0.5, family = "mono"),
+    text = element_text(family = "mono", size = 10, color="black")
+  )
+
+# Combine PCA plot with Scree Plot in bottom corner
+final_plot <- ggdraw() +
+  draw_plot(pca_plot) +
+  draw_plot(scree_plot, x = .1, y = 0.1, width = 0.17, height = 0.25)
+final_plot
+```
+
+## Run sNMF in LEA
+
+```{r eval= FALSE}
+setwd("~/Quercus_bicolor/data/")
+gl2geno(g, outfile= "g_geno",outpath= getwd())
+#detect admixture
+project = snmf("g_geno.geno", K = 1:14, entropy = TRUE, repetitions = 100, seed=42, project = "new", iterations=1000000, alpha=10)
+project = load.snmfProject("g_geno.snmfProject")
+plot(project, col = "blue", pch = 19, cex = 1.2)
+# select the best run for K = 4 clusters 
+best = which.min(cross.entropy(project, K = 5)) 
+my.colors <- c("tomato", "olivedrab", "gold","lightblue","pink","purple","orange") 
+windows()
+barchart(project, K = 5, run = best, border = NA,sort.by.Q=FALSE, space = 0, col = my.colors, xlab = "Individuals", ylab = "Ancestry proportions", main = "Ancestry matrix")-> bp 
+axis(1, at = 1:length(names), labels = names, las=2, cex.axis = .5)
+q_scores<-Q(project, K = 5, which.min(cross.entropy(project, K = 5)))
+q<-cbind(pops,q_scores) %>% as.data.frame()
+q$V4<-as.numeric(q$V4)
+#apply threshold
+q$pure<-q$V4>0.84
+write.csv(q,"qscores_k5.csv")
+```
+#### Make txt file for STACKS populations with pure individuals for analysis in Part 4
+```{r eval= FALSE}
+pure<-q[q$pure==TRUE,]
+#remove reference samples
+pure<-pure[pure$pop!='Ref. Sample-Q. bicolor',]
+setwd("~/Quercus_bicolor/data/")
+write.table(pure[,1:2], "pure.txt", sep="\t", row.names=FALSE, col.names=FALSE, quote=FALSE)
+```
+
+#### Then you can run STACKS again in the command line (from inside "Quercus_bicolor" directory) to generate another .vcf of the "pure" Q. bicolor individuals for part IV (below).
+
+``` {.bash eval= FALSE}
+stacks-2.68/populations --in-path ./data/STACKS/ --popmap ./data/pure.txt --out-path ./data/STACKS/dataset3/ -R 0.95 --min-gt-depth 5 --min-mac 3 --genepop --structure --ordered-export --write-single-snp
+```
+
+## Run Dsuite (command line) to get Patterson's D statistics
+#### First, generate new .vcf file with no missing data
+``` {.bash eval= FALSE}
+#generate new .vcf with no missing data
+stacks-2.68/populations --in-path ./data/STACKS/ --popmap ./data/popmap_dataset1.txt --out-path ./data/STACKS/Dsuite/ -R 1 --min-gt-depth 5 --min-mac 3 --vcf --ordered-export --write-single-snp
+
+#zip .vcf file
+cd ./data/STACKS/Dsuite/
+gzip populations.snps.vcf
+cd ~/Quercus_bicolor
+```
+#### Then, run Dsuite
+``` {.bash eval= FALSE}
+# after installing Dsuite in main directory
+./Dsuite/Build/Dsuite Dinvestigate -n ./data/dinvestigate1 ./data/STACKS/Dsuite/populations.snps.vcf.gz ./data/SETS_2.txt ./data/test_trios_2.txt > ./data/dinvestigate1_output.txt 2> ./data/dinvestigate1_log.txt
+```
+#### Convert raw Dsuite Dinvestigate output to dataframe
+```{r eval= FALSE}
+# get file from Dsuite Dinvestigate
+setwd("~/Quercus_bicolor/")
+# Read in lines from output file
+lines <- readLines("./data/dinvestigate1_output.txt")
+head(lines, 20)
+lines<-lines[18:length(lines)]
+# Initialize list to hold parsed results
+results <- list()
+# We'll iterate in chunks of 7 lines (6 lines of data + 1 blank)
+i <- 1
+while (i <= length(lines) - 6) {
+  # Skip if the current line is empty
+  if (lines[i] == "") {
+    i <- i + 1
+    next
+  }
+  
+  # Extract trio
+  trio <- unlist(strsplit(lines[i], "\t"))
+  P1 <- trio[1]
+  P2 <- trio[2]
+  P3 <- trio[3]
+  
+  # Extract values
+  D       <- as.numeric(sub("D=", "", lines[i + 1]))
+  f_d     <- as.numeric(sub("f_d=", "", strsplit(lines[i + 2], "\t")[[1]][1]))
+  f_dM    <- as.numeric(sub("f_dM=", "", strsplit(lines[i + 3], "\t")[[1]][1]))
+  ABBA_p  <- as.numeric(sub("ABBA_KSpval = ", "", lines[i + 4]))
+  BABA_p  <- as.numeric(sub("BABA_KSpval = ", "", lines[i + 5]))
+  
+  # Save to list
+  results[[length(results) + 1]] <- data.frame(
+    P1 = P1, P2 = P2, P3 = P3,
+    D = D, f_d = f_d, f_dM = f_dM,
+    ABBA_KSpval = ABBA_p, BABA_KSpval = BABA_p,
+    stringsAsFactors = FALSE
+  )
+  
+  # Move to next block
+  i <- i + 7
+}
+df <- do.call(rbind, results)
+colnames(df)[colnames(df) == "P2"] <- "names"
+colnames(pops)[colnames(pops) == "ID"] <- "names"
+dfmer<-merge(df,q,by="names")
+dfmer<-merge(dfmer, pops, by='names')
+tail(dfmer)
+plot(x=dfmer$D, y=dfmer$LAT)
+plot<-ggplot(dfmer, aes(x = D, y = LAT)) +
+  geom_point(aes(color = pop.y)) +  # Color points by "pop"
+  xlab("sNMF Ancestry Proportion") +
+  ylab(expression('D')) +
+  theme_minimal() +
+  labs(title = "D Stat as Function of Ancestry Proportion", color = "Population") +
+  theme(legend.position = "right", text = element_text(family = "mono", color="black")) +
+  theme(panel.grid.major = element_line(color = "gray85", size = 0.05),  # Lighter major grid lines
+        panel.grid.minor = element_line(color = "gray92", size = 0.05))
+)
+plot
+library(dplyr)
+popD<-dfmer %>%
+  group_by(pop.y) %>%
+  summarize(mean_D = mean(D, na.rm = TRUE)) %>% as.data.frame()
+colnames(popD)[colnames(popD) == "pop.y"] <- "pop"
+merged_data<-merge(merged_data,popD, by='pop')
+
+library(ggplot2)
+library(dplyr)
+# Calculate mean and SD
+summary_stats <- dfmer %>%
+  group_by(pop.y) %>%
+  summarize(
+    mean_D = mean(D, na.rm = TRUE),
+    sd_D = sd(D, na.rm = TRUE)
+  ) %>%
+  mutate(group = ifelse(row_number() <= 9, "CORE", "EDGE"))
+
+# Plot with color by group
+plot<-ggplot(summary_stats, aes(x = pop.y, y = mean_D, fill = group)) +
+  geom_col(width = 0.7) +
+  geom_errorbar(aes(ymin = mean_D - sd_D, ymax = mean_D + sd_D),
+                width = 0.2, color = "black") +
+  scale_fill_manual(values = c("CORE" = "tomato", "EDGE" = "steelblue")) +
+  labs(title = "Mean D by Population",
+       x = "Population", y = "Mean D", fill = "") +
+  theme(text = element_text(family = "mono")) +
+  theme_minimal() +
+  theme_minimal() +
+  theme(
+    legend.position = "right",
+    text = element_text(family = "mono", color = "black"),
+    panel.grid.major = element_line(color = "gray85", size = 0.05),
+    panel.grid.minor = element_line(color = "gray92", size = 0.05),
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+#plot for population level
+df$pop2<-c("EDGE","EDGE","EDGE","EDGE","EDGE","EDGE","EDGE","EDGE","EDGE","EDGE","EDGE","EDGE","CORE","CORE","CORE","CORE","CORE","CORE","CORE","CORE","CORE")
+library("tidyverse")
+# Reshape the data to long format for plotting D, f_d, and f_dM
+df_long <- df %>%
+  select(P2, D, f_d, f_dM, pop2) %>%
+  pivot_longer(cols = c(D, f_d, f_dM), names_to = "stat", values_to = "value")
+
+# Plot
+plot<-ggplot(df, aes(x = P2, y = D, fill = pop2)) +
+  geom_col(position = "dodge", width = 0.7) +
+  scale_fill_manual(values = c("CORE" = "tomato", "EDGE" = "steelblue")) +
+  labs(title = "Patterson's D Statistic by Population",
+       x = "Population", y = "Value", fill = "Group") +
+  theme_minimal() +
+  theme(
+    text = element_text(family = "mono", color = "black"),
+    panel.grid.major = element_line(color = "gray85", size = 0.05),
+    panel.grid.minor = element_line(color = "gray92", size = 0.05),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "right"
+  )
+plot
+```
+
+## Analyze dataset 2 using sNMF
+
+```{r eval= FALSE}
+vc<-read.vcfR("./data/STACKS/dataset2/populations.snps.vcf")
+g<-vcfR2genlight(vc)
+pm<-read.csv("./data/popmap_dataset2_version2.csv",header=TRUE)
+g@pop<-pm$pop %>% as.factor()
+
+setwd("~/Quercus_bicolor/data/")
+gl2geno(g, outfile= "g_geno_dataset2",outpath= getwd())
+names<-g@ind.names
+pop<-pm$pop
+#detect admixture
+project = snmf("g_geno_dataset2.geno", K = 1:14, entropy = TRUE, repetitions = 100, seed=42, project = "new", iterations=1000000, alpha=10)
+project = load.snmfProject("g_geno_dataset2.snmfProject")
+plot(project, col = "blue", pch = 19, cex = 1.2)
+# select the best run for K = 2 clusters 
+best = which.min(cross.entropy(project, K = 2)) 
+my.colors <- c("olivedrab", "lightblue") 
+windows()
+barchart(project, K = 2, run = best, border = NA,sort.by.Q=FALSE, space = 0, col = my.colors, xlab = "Individuals", ylab = "Ancestry proportions", main = "Ancestry matrix")-> bp 
+axis(1, at = 1:length(names), labels = names, las=2, cex.axis = .5)
+q_scores<-Q(project, K = 2, which.min(cross.entropy(project, K = 5)))
+q<-cbind(names, pop,q_scores) %>% as.data.frame()
+```
+
+## Run NewHybrids
+
+#### Make sure NewHybrids is installed in directory (\~/Quercus_bicolor/data/NewHybrids/)
+
+#### Convert "./data/STACKS/dataset2/populations.snps.vcf" to NEWHYBRIDS file using PGDSPider GUI program, then run:
+
+``` {.bash eval= FALSE}
+cd ~/Quercus_bicolor/data/NewHybrids/
+./newhybrids-no-gui-linux.exe -d ./newhybrids_data.txt --no-gui --burn-in 50000 --num-sweeps 500000 --seeds 17 47
+```
+
+#### Plot hybrid assignments in R
+
+```{r eval= FALSE}
+setwd("~/Quercus_bicolor/")
+nhq<-read.csv("./data/NewHybrids/aa-PofZ.csv")
+library(dplyr)
+nq<-nhq[,3:8] %>% t()
+#plot
+po<-read.csv("./data/popmap_dataset2_version2", header=TRUE)
+pops<-po$pop
+names<-po$individual
+my.colors <- c("lightblue","olivedrab", "tomato","pink","purple", "gold")
+#plot
+# Set the output to a PDF file
+png("barplot_newhybrids.png", width=2000, height=800, res=150)
+par(mfrow=c(1,1), mar= c(11,2,4,2), oma = c(0,0,0,0)) 
+par(mgp = c(4, 0, -1)) 
+par(family="mono")
+# Create the bar plot
+plot <- barplot(height= nq, col=my.colors, main= "NewHybrids Analysis, Dataset 2", las=2, 
+                cex.names=1, cex.axis = 1, cex.lab=1.5, cex.main=2.5, 
+                font.lab=2, font.axis=2, names.arg=rep("", length(names)), border=FALSE, space=0) # Remove individual labels
+# Find unique group positions and midpoint for labeling
+unique_pops <- unique(pops)
+label_positions <- sapply(unique_pops, function(pop) mean(plot[pops == pop])) # Compute midpoints correctly
+# Add population labels at midpoints
+axis(1, at=label_positions, labels=unique_pops, tick=FALSE, cex.axis=0.75, las=2)
+# Add vertical lines between groups
+group_positions <- which(diff(as.numeric(factor(pops, levels=unique(pops)))) != 0)
+for (pos in group_positions) {
+  abline(v = plot[pos] + diff(plot[1:2]) / 2, col = "black", lwd = 1.5)
+}
+# Add legend outside at the bottom
+legend("right", legend = c("Quercus bicolor", "Quercus lyrata", "F1", "F2", 
+                           "F1 x Quercus bicolor", "F1 x Quercus lyrata"), 
+       fill = my.colors, border = "black", cex = 1.5, bty = "n", inset=0.15 ,  xpd = TRUE)
+dev.off()
+```
+
+# III. Assess heterozygosity, Fst, Fis relative to Q. bicolor ancestry proportion (V4)
+
+#### get STACKS output for just the Qbicolor samples (exclude reference samples and those with higher missing data)
+
+```{r eval= FALSE}
+setwd("~/Quercus_bicolor/data/STACKS/dataset1/")
+vc<-read.vcfR("populations.snps.vcf")
+g<-vcfR2genlight(vc)
+g<-gl.compliance.check(g)
+#filter to only include SNPs with callrate of 1 (can also be done within the STACKS populations module)
+g<-gl.filter.callrate(g, threshold=1)
+g@pop<-pops$pop[1:135] %>% as.factor()
+g@strata<-pops$pop2[1:135] %>% as.data.frame
+q<-read.csv("qscores_k5.csv")
+
+div<-gl.report.diversity(g)
+heto<-gl.report.heterozygosity(g)
+# Convert div$zero_D_alpha (named vector) into a data frame
+div_df <- data.frame(pop = names(div$zero_D_alpha), D_alpha = as.numeric(div$zero_D_alpha))
+# Merge the two tables based on the "pop" column
+merged_data <- merge(div_df, heto, by = "pop")
+
+#get Fst values and pairwise FST means
+fst<-gl.fst.pop(g)
+fst<-fst %>% as.matrix()
+fst_no_diag <- fst
+diag(fst_no_diag) <- NA
+# Create an empty vector to store the means for each population
+pairwise_means <- vector("numeric", length = nrow(fst))
+# Loop through each population and calculate the pairwise average Fst
+for (i in 1:nrow(fst)) {
+  # Get the row (excluding the diagonal value for this population)
+  row_values <- fst_no_diag[i, ]
+  # Get the column (excluding the diagonal value for this population)
+  col_values <- fst_no_diag[, i]
+  # Combine both row and column values (without double-counting)
+  combined_values <- c(row_values, col_values)
+  # Remove NA values and calculate the mean
+  combined_values <- combined_values[!is.na(combined_values)]
+  pairwise_means[i] <- mean(combined_values)
+}
+# Add the results back to the matrix for easy reference
+names(pairwise_means) <- rownames(fst)
+pairwise_means<-as.data.frame(pairwise_means, row.names = NULL)
+pairwise_means$pop<-rownames(pairwise_means)
+pairwise_means
+#combine with het and div table
+merged_data <- merge(merged_data, pairwise_means, by = "pop")
+#add a column delineating core and edge pops
+merged_data$pop3<-substr(merged_data$pop, start = 1, stop = 4)
+#add q scores averaged for each pop
+q_135<-q[1:135,]
+qavg <- q_135 %>%
+  group_by(pop) %>%
+  summarise(across(V4, mean, na.rm = TRUE)) %>% as.data.frame() # Compute mean for numeric columns
+merged_data <- merge(merged_data, qavg, by = "pop")
+
+
+#regression of FIS vs ancestry proportion
+# filter out pops with less than 3 individuals
+merged_data_fil<-merged_data[merged_data$n.Ind>2,]
+#transform FIS to be between 0 and 1 
+merged_data_fil$FIStransf<-((merged_data_fil$FIS+1)/2)
+library(betareg)
+mod1 <- betareg::betareg(FIStransf ~ V4, data = merged_data_fil, link = "logit")
+# Extract design matrix (n × p)
+s<-summary(mod1)
+s$coefficients$mean[2,4]
+# Extract R-squared and p-value
+r2_value <- summary(mod1)$pseudo.r.squared
+p_value <- summary(mod1)$coefficients$mean[2,4]  # P-value for V4
+# Create text label for plot
+lm_text <- paste0("Pseudo R² = ", round(r2_value, 3), 
+                  "\nP-value = ", format.pval(p_value, digits = 1, eps = 0.001))
+# Create scatter plot with regression line and stats annotation
+new_data <- data.frame(V4 = seq(min(merged_data_fil$V4),max(merged_data_fil$V4), length.out = 100))
+# Predict values and back-transform them to original scale
+new_data$predicted_transf <- predict(mod1, newdata = new_data, type = "response")
+new_data$predicted_original <- 2 * new_data$predicted_transf - 1  # Back-transformation
+par(family="mono")
+plot<-ggplot(merged_data_fil, aes(x = V4, y = FIS)) +
+  geom_point(aes(color = pop)) +  # Color points by "pop"
+  geom_line(data=new_data, color='black',show.legend=FALSE,size=0.5,aes(x=V4, y = predicted_original, linetype = "logit")) +
+  xlab("sNMF Ancestry Proportion") +
+  ylab(expression("F"[IS])) +
+  theme_minimal() +
+  labs(title = "Inbreeding Coefficient as Function of Ancestry Proportion", color = "Population") +
+  theme(legend.position = "right", text = element_text(family = "mono", color="black")) +
+  theme(panel.grid.major = element_line(color = "gray85", size = 0.05),  # Lighter major grid lines
+        panel.grid.minor = element_line(color = "gray92", size = 0.05))+  
+  annotate("text", 
+           x = max(merged_data_fil$V4) * 0.5, 
+           y = -0.1, 
+           label = lm_text, 
+           size = 3, family = "mono", color="black")
+)
+plot
+
+#regression of average pairwise Fst values
+mod <- betareg::betareg(pairwise_means ~ V4, data = merged_data_fil, link = "logit")
+# Extract design matrix (n × p)
+s<-summary(mod)
+s$coefficients$mean[2,4]
+# Extract R-squared and p-value
+r2_value <- summary(mod)$pseudo.r.squared
+p_value <- summary(mod)$coefficients$mean[2,4]  # P-value for V4
+# Create text label for plot
+lm_text <- paste0("Pseudo R² = ", round(r2_value, 3), 
+                  "\nP-value = ", format.pval(p_value, digits = 3, eps = 0.001))
+# Create scatter plot with regression line and stats annotation
+plot<-ggplot(merged_data_fil, aes(x = V4, y = pairwise_means)) +
+  geom_point(aes(color = pop)) +  # Color points by "pop"
+  geom_line(color='black',show.legend=FALSE,size=0.5,aes(y = predict(mod, merged_data_fil), linetype = "logit")) +
+  xlab("sNMF Ancestry Proportion") +
+  ylab(expression("F"[ST])) +
+  theme_minimal() +
+  labs(title = "Fixation Index as Function of Ancestry Proportion", color = "Population") +
+  theme(legend.position = "right", text = element_text(family = "mono", color="black")) +
+  theme(panel.grid.major = element_line(color = "gray85", size = 0.05),  # Lighter major grid lines
+        panel.grid.minor = element_line(color = "gray92", size = 0.05))+  
+  annotate("text", 
+           x = max(merged_data_fil$V4) * 0.4, 
+           y = max(merged_data_fil$pairwise_means) * 0.6, 
+           label = lm_text, 
+           size = 3, family = "mono", color="black")
+)
+plot
+
+#also get by individual observed heterozygosity
+het<-gl.report.heterozygosity(g, method='ind')
+colnames(het)[colnames(het) == "ind.name"] <- "names"
+merged_data_ind <- merge(het, q_135, by = "names")
+merged_data_ind$HetSitesHo<-(merged_data_ind$Ho)*7955
+merged_data_ind$HomSitesHo<-(1-merged_data_ind$Ho)*7955
+#binomial GLM model
+modmod<-glm(cbind(HetSitesHo,HomSitesHo)~V4, data=merged_data_ind, family=binomial(link='logit'))
+summary(modmod)
+predictedmodel<-predict.glm(modmod,merged_data_ind,se.fit = T)
+ci_lwr <- with(predictedmodel, plogis(fit - 1.96*se.fit))
+ci_upr <- with(predictedmodel, plogis(fit + 1.96*se.fit))
+merged_data_ind<-cbind(merged_data_ind,predictedmodel)
+merged_data_ind$fit2<-plogis(merged_data_ind$fit)
+merged_data_ind$lwr<-ci_lwr
+merged_data_ind$upr<-ci_upr
+#pseudo R2
+r2_value<-1-modmod$deviance/modmod$null.deviance
+#get pvalue
+library(stats)
+anova(modmod, test="Chisq")
+lm_text <- paste0("\nPseudo R² = ", round(r2_value, 3),
+                  "\np-value = <0.0001")
+plot<-ggplot(merged_data_ind, aes(x = V4, y = Ho)) +
+  geom_point(aes(color = pop)) +  # Color points by "pop"
+  geom_ribbon(aes(ymin = lwr, ymax = upr), fill = "grey", alpha = 0.15) +  # Neutral-colored error ribbon
+  geom_line(aes(y = fit2), color = "black", size = .5) +  # Regression line
+  xlab("sNMF Ancestry Proportion") +
+  ylab(expression('H'[O])) +
+  theme_minimal() +
+  labs(title = "Observed Heterozygosity as Function of Ancestry Proportion", color = "Population") +
+  theme(legend.position = "right", text = element_text(family = "mono", color="black")) +
+  theme(panel.grid.major = element_line(color = "gray85", size = 0.05),  # Lighter major grid lines
+        panel.grid.minor = element_line(color = "gray92", size = 0.05))+  
+  annotate("text", 
+           x = max(merged_data_ind$V4) * 0.5, 
+           y = max(merged_data_ind$Ho) * 0.9, 
+           label = lm_text, 
+           hjust = 0, size = 3, family = "mono", color="black")
+)
+plot
+```
+
+# IV. Assess GD, IBD, AMOVA, and structure only including "pure" Q. bicolor
+
+#### Prepare data
+
+```{r eval= FALSE}
+setwd("~/Quercus_bicolor/")
+vc<-read.vcfR("./data/STACKS/dataset3/populations.snps.vcf")
+g<-vcfR2genlight(vc)
+g<-gl.compliance.check(g)
+names<-g@ind.names
+g@pop<-pure$pop %>% as.factor()
+strata<-pure$pop2 %>% as.data.frame()
+g@strata<-strata
+coords<-cbind(pure$LAT,pure$LON) %>% as.data.frame()
+g@other$latlon<-coords
+```
+
+#### Run IBD on edge and core together
+
+```{r eval= FALSE}
+ibd<-gl.ibd(g, coordinates="latlon")
+ibd
+#separate edge and core
+edge<-g[g@strata$.=='EDGE']
+core<-g[g@strata$.=='CORE']
+#run IBD on each separately
+ibd_edge<-gl.ibd(edge, coordinates="latlon")
+ibd_core<-gl.ibd(core, coordinates="latlon")
+```
+
+#### Run AMOVA
+
+```{r eval= FALSE}
+amova<-gl.amova(g)
+amova_edge<-gl.amova(edge)
+amova_core<-gl.amova(core)
+```
+
+#### Run sNMF
+
+```{r eval= FALSE}
+gl2geno(g, outfile= "g_geno",outpath= getwd())
+names<-g@ind.names
+#detect admixture
+project = snmf("g_geno.geno", K = 1:14, entropy = TRUE, repetitions = 100, seed=42, project = "new", iterations=1000000, alpha=10)
+project = load.snmfProject("g_geno.snmfProject")
+plot(project, col = "blue", pch = 19, cex = 1.2)
+# select the best run for K = 4 clusters 
+best = which.min(cross.entropy(project, K = 5)) 
+my.colors <- c("tomato", "olivedrab", "gold","lightblue","pink","purple","orange") 
+windows()
+barchart(project, K = 5, run = best, border = NA,sort.by.Q=FALSE, space = 0, col = my.colors, xlab = "Individuals", ylab = "Ancestry proportions", main = "Ancestry matrix")-> bp 
+axis(1, at = 1:length(names), labels = names, las=2, cex.axis = .5)
+q_scores_pure<-Q(project, K = 5, which.min(cross.entropy(project, K = 5)))
+q_pure<-cbind(pure,q_scores_pure) %>% as.data.frame()
+write.csv(q_pure,"qscores_k5_pure.csv")
+```
+
+#### Get pop gen stats on Dataset 3
+
+```{r eval= FALSE}
+#get ttests on het and fis fst values
+het<-gl.report.heterozygosity(g)
+div<-gl.report.diversity(g)
+# Convert div$zero_D_alpha (named vector) into a data frame
+div_df <- data.frame(pop = names(div$zero_D_alpha), D_alpha = as.numeric(div$zero_D_alpha))
+# Merge the two tables based on the "pop" column
+merged_data <- merge(div_df, het, by = "pop")
+
+#get fst values
+fst<-gl.fst.pop(g)
+fst_no_diag <- fst
+diag(fst_no_diag) <- NA
+# Create an empty vector to store the means for each population
+pairwise_means <- vector("numeric", length = nrow(fst))
+# Loop through each population and calculate the pairwise average Fst
+for (i in 1:nrow(fst)) {
+  # Get the row (excluding the diagonal value for this population)
+  row_values <- fst_no_diag[i, ]
+  # Get the column (excluding the diagonal value for this population)
+  col_values <- fst_no_diag[, i]
+  # Combine both row and column values (without double-counting)
+  combined_values <- c(row_values, col_values)
+  # Remove NA values and calculate the mean
+  combined_values <- combined_values[!is.na(combined_values)]
+  pairwise_means[i] <- mean(combined_values)
+}
+# Add the results back to the matrix for easy reference
+names(pairwise_means) <- rownames(fst)
+pairwise_means<-as.data.frame(pairwise_means, row.names = NULL)
+pairwise_means$pop<-rownames(pairwise_means)
+pairwise_means
+
+merged_data <- merge(merged_data, pairwise_means, by = "pop")
+merged_data$pop2<-substr(merged_data$pop, start = 1, stop = 4)
+merged_data
+colnames(merged_data)[colnames(merged_data)=="pairwise_means"]<-"Avg_Fst"
+write.csv(merged_data, "merged_data_PURE.csv")
+
+popedge<-merged_data[merged_data$pop2=='EDGE',]
+popcore<-merged_data[merged_data$pop2=='CORE',]
+
+mergedfilt<-merged_data[merged_data$nInd>2,]
+popedge<-mergedfilt[mergedfilt$pop2=='EDGE',]
+popcore<-mergedfilt[mergedfilt$pop2=='CORE',]
+
+t.test(popedge$Ho.adj, popcore$Ho.adj,alternative='less', var.equal = FALSE)
+t.test(popedge$He.adj, popcore$He.adj,alternative='less', var.equal = FALSE)
+t.test(popedge$FIS, popcore$FIS,alternative='greater', var.equal = FALSE)
+t.test(popedge$Avg_Fst, popcore$Avg_Fst,alternative='greater', var.equal = FALSE)
+t.test(popedge$D_alpha, popcore$D_alpha,alternative='less', var.equal = FALSE)
+t.test(popedge$pi, popcore$pi,alternative='less', var.equal = FALSE)
+
+shapiro.test(popedge$FIS)
+shapiro.test(popcore$FIS)
+hist(popedge$FIS)
+
+var.test(popedge$Ho, popcore$Ho, alternative='greater')
+var.test(popedge$He, popcore$He, alternative='greater')
+var.test(popedge$FIS, popcore$FIS, alternative='greater')
+var.test(popedge$Avg_Fst, popcore$Avg_Fst, alternative='greater')
+
+library(car)
+#test if variances are sig diff
+group <- c(rep("Group1", length(edge$FIS)), rep("Group2", length(core$FIS)))
+values <- c(edge$FIS, core$FIS)
+var(edge$FIS)
+var(core$FIS)
+ltest<-leveneTest(values ~ group)
+ltest$`Pr(>F)`/2
+
+group <- c(rep("Group1", length(edge$He)), rep("Group2", length(core$He)))
+values <- c(edge$He, core$He)
+var(edge$He)
+var(core$He)
+ltest<-leveneTest(values ~ group)
+ltest$`Pr(>F)`/2
+
+group <- c(rep("Group1", length(edge$Allelic.Richness)), rep("Group2", length(core$Allelic.Richness)))
+values <- c(edge$Allelic.Richness, core$Allelic.Richness)
+var(edge$Allelic.Richness)
+var(core$Allelic.Richness)
+ltest<-leveneTest(values ~ group)
+ltest$`Pr(>F)`/2
+
+group <- c(rep("Group1", length(edge$pi)), rep("Group2", length(core$pi)))
+values <- c(edge$pi, core$pi)
+var(edge$pi)
+var(core$pi)
+ltest<-leveneTest(values ~ group)
+ltest$`Pr(>F)`/2
+
+group <- c(rep("Group1", length(popedge$pi)), rep("Group2", length(popcore$pi)))
+values <- c(popedge$pi, popcore$pi)
+var(popedge$pi)
+var(popcore$pi)
+ltest<-leveneTest(values ~ group)
+ltest$`Pr(>F)`/2
+
+```
+
+#### Run Treemix
+
+##### Prepare and check data in R
+
+```{r eval= FALSE}
+vc<-read.vcfR("./data/STACKS/dataset2_NoMissing/populations.snps.vcf")
+g<-vcfR2genlight(vc)
+pm_treemix<-read.delim("./data/popmap_treemix.txt",header=FALSE)
+g@pop<-pm_treemix$V2 %>% as.factor()
+setwd("./data/treemix")
+gl2treemix(g, outfile="g_141.treemix.gz", outpath=getwd())
+```
+
+##### Run treemix in command line (make sure treemix is installed in "\~/Quercus_bicolor/data/treemix" directory)
+
+``` {.bash eval=FALSE}
+cd ~/Quercus_bicolor/data/treemix
+./treemix-1.13/treemix-1.13/src/treemix -i g_141.treemix.gz -o ./treemix_out/out.1.1 -root 3 -m 1 -bootstrap
+./treemix-1.13/treemix-1.13/src/treemix -i g_141.treemix.gz -o ./treemix_out/out.2.1 -root 3 -m 1 -bootstrap
+./treemix-1.13/treemix-1.13/src/treemix -i g_141.treemix.gz -o ./treemix_out/out.3.1 -root 3 -m 1 -bootstrap
+./treemix-1.13/treemix-1.13/src/treemix -i g_141.treemix.gz -o ./treemix_out/out.4.1 -root 3 -m 1 -bootstrap
+./treemix-1.13/treemix-1.13/src/treemix -i g_141.treemix.gz -o ./treemix_out/out.5.1 -root 3 -m 1 -bootstrap
+./treemix-1.13/treemix-1.13/src/treemix -i g_141.treemix.gz -o ./treemix_out/out.1.2 -root 3 -m 2 -bootstrap
+./treemix-1.13/treemix-1.13/src/treemix -i g_141.treemix.gz -o ./treemix_out/out.2.2 -root 3 -m 2 -bootstrap
+./treemix-1.13/treemix-1.13/src/treemix -i g_141.treemix.gz -o ./treemix_out/out.3.2 -root 3 -m 2 -bootstrap
+./treemix-1.13/treemix-1.13/src/treemix -i g_141.treemix.gz -o ./treemix_out/out.4.2 -root 3 -m 2 -bootstrap
+./treemix-1.13/treemix-1.13/src/treemix -i g_141.treemix.gz -o ./treemix_out/out.5.2 -root 3 -m 2 -bootstrap
+./treemix-1.13/treemix-1.13/src/treemix -i g_141.treemix.gz -o ./treemix_out/out.1.3 -root 3 -m 3 -bootstrap
+./treemix-1.13/treemix-1.13/src/treemix -i g_141.treemix.gz -o ./treemix_out/out.2.3 -root 3 -m 3 -bootstrap
+./treemix-1.13/treemix-1.13/src/treemix -i g_141.treemix.gz -o ./treemix_out/out.3.3 -root 3 -m 3 -bootstrap
+./treemix-1.13/treemix-1.13/src/treemix -i g_141.treemix.gz -o ./treemix_out/out.4.3 -root 3 -m 3 -bootstrap
+./treemix-1.13/treemix-1.13/src/treemix -i g_141.treemix.gz -o ./treemix_out/out.5.3 -root 3 -m 3 -bootstrap
+```
+
+##### Repeat for values of m ranging 1-10 with 5 repetitions, following same pattern of file names
+
+##### Plot treemix results in R
+
+```{r eval= FALSE}
+source("~/Quercus_bicolor/treemix-1.13/treemix-1.13/src/plotting_funcs.R")
+setwd("~/Quercus_bicolor/data/treemix/treemix_out/")
+list.files(pattern='\\.modelcov.gz$')
+library(OptM)
+optm<-optM(getwd())
+plot_optM(optm)
+windows()
+plot_tree("~/Quercus_bicolor/data/treemix/treemix_out/out.1.6")
+```
+
+#### Run Tess3r
+
+```{r eval= FALSE}
+devtools::install_github("bcm-uga/TESS3_encho_sen")
+library(tess3r)
+#impute missing values
+best = which.min(cross.entropy(project, K = 5)) 
+impute(project, "gl_geno.lfmm", method = 'mode', K = 5, run = best) 
+
+coordinates<-as.matrix(coords)
+dim(coordinates)
+dim("gl_geno.lfmm")
+library(maps)
+plot(coordinates, pch = 19, cex = .5, 
+     xlab = "Longitude (°E)", ylab = "Latitude (°N)")
+map(database= "county", add = T, interior = T)
+project= load.lfmmProject("gl_geno.lfmmProject")
+lfmm<-read.lfmm("glv_geno.lfmm_imputed.lfmm")
+tess3.obj <- tess3(X = lfmm, coord = coords, K = 1:14, 
+                   method = "projected.ls", ploidy = 2, openMP.core.num = 4, max.iteration = 1000000, rep=10) 
+
+plot(tess3.obj, pch = 19, col = "blue",
+     xlab = "Number of ancestral populations",
+     ylab = "Cross-validation score")
+# retrieve tess3 Q matrix for K = 5 clusters 
+q.matrix <- qmatrix(tess3.obj, K = 4)
+# STRUCTURE-like barplot for the Q-matrix 
+pal<-CreatePalette(color.vector = c("tomato", "chartreuse","blue", "gold",
+                               "violet", "olivedrab", "purple", "brown","orange","pink"), palette.length = 4)
+barplot(q.matrix, border = NA, sort.by.Q=FALSE,space = 0,
+        xlab = "Individuals", ylab = "Ancestry proportions", 
+        main = "Ancestry matrix") -> bp
+q<-q.matrix %>% as.data.frame() %>% cbind(order)
+axis(1, at = 1:nrow(q.matrix), labels = plotorder, las = 3, cex.axis = .4) 
+plot(q.matrix, coord, method = "map.max", interpol = FieldsKrigModel(10),  
+     main = "Ancestry coefficients",
+     xlab = "Longitude", ylab = "Latitude", 
+     resolution = c(300,300), cex = .4, 
+     col.palette = pal)
+
+map<-map(database= "county", add = T, interior = T, col="grey",lwd=0.2)
+map<-map(database= "state", add = T, interior = T, col="grey",lwd=1)
+```
+
+# Geospatial analysis
+
+```{r eval= FALSE}
+library(dplyr)
+library(terra)
+library(SDMtune)
+library(mapview)
+setwd("~/Quercus_bicolor/geospatial/")
+#get bioclimatic data from https://www.worldclim.org/data/worldclim21.html
+#put in "~/Quercus_bicolor/geospatial/env_data/"
+#assemble occurences and create buffers
+qubi<-read.csv("Qbicolor_occurences.csv")
+qubi<-qubi[qubi$pa==1,]
+qubi<-vect(qubi, crs='EPSG:4326', c('x','y'))
+qubi_buf500<-buffer(qubi, width=500000)
+qubi_buf500<-aggregate(qubi_buf500, dissolve=TRUE)
+quly<-read.csv("Qlyrata_occurences.csv")
+colnames(quly)
+quly<-vect(quly, crs='EPSG:4326', c('decimalLongitude','decimalLatitude'))
+quly_buf500<-buffer(quly, width=500000)
+quly_buf500<-aggregate(quly_buf500, dissolve=TRUE)
+plot(quly_buf500)
+merge_buf500<-rbind(quly_buf500, qubi_buf500)
+merge_buf500<-aggregate(merge_buf500, dissolve=TRUE)
+qubi_buf150<-buffer(qubi, width=150000)
+qubi_buf150<-fillHoles(qubi_buf150)
+plot(qubi_buf150)
+quly_buf150<-buffer(quly, width=150000)
+quly_buf150<-aggregate(quly_buf150, dissolve=TRUE)
+quly_buf150<-fillHoles(quly_buf150)
+plot(quly_buf150)
+merge_buf150<-rbind(quly_buf150, qubi_buf150)
+merge_buf150<-aggregate(merge_buf150, dissolve=TRUE)
+plot(merge_buf150)
+merge_buf150<-fillHoles(merge_buf150)
+writeVector(merge_buf150, "merge_buf150.shp")
+writeVector(qubi_buf150, "qubi_buf150.shp")
+writeVector(quly_buf150, "quly_buf150.shp")
+
+output_folder <-"~Quercus_bicolor/geospatial/"
+files <- list.files(output_folder, pattern = "\\.tif$", full.names = TRUE)
+bioclim2<-rast(files)
+crs(bioclim)==crs(bioclim2)
+bioclim<-rast(files)
+plot(bioclim2$wc2.1_2.5m_bio_1, )
+ex<-c(-105,-69,20,50)
+bioclimc<-crop(bioclim2,ex)
+plot(bioclimc$wc2.1_2.5m_bio_1)
+##model SWO
+bioclim_qubi<-crop(bioclim, qubi_buf150, mask=TRUE)
+plot(bioclim_qubi$wc2.1_2.5m_bio_1)
+qubi_bg<- terra::spatSample(bioclim_qubi, size = 10000, method = "random", na.rm = TRUE,xy = TRUE,values = FALSE)
+library(dplyr)
+qubi_pres<-geom(qubi)[,c('x','y')] %>% as.data.frame()
+qubi_bg<-qubi_bg %>% as.data.frame()
+library(zeallot)
+qubi_pres<-thinData(qubi_pres, bioclim_qubi, x= 'x', y='y')
+qubi_bg<-thinData(qubi_bg, bioclim_qubi, x= 'x', y='y')
+bg<- terra::spatSample(bioclim_qubi, size = 10000, method = "random", na.rm = TRUE,xy = TRUE,values = FALSE)
+bgSWD<-prepareSWD("background",bioclim_qubi, p=NULL,a=bg)
+data<-prepareSWD("quercusbicolor", bioclim_qubi, p=qubi_pres, a=qubi_bg )
+c(qubi_train, qubi_test) %<-% trainValTest(data, 
+                                 test = 0.15, 
+                                 only_presence = TRUE, 
+                                 seed = 33)
+#parition training data
+cv<-randomFolds(qubi_train, k=10, only_presence= TRUE)
+#create maxent model with default values
+maxent_all<-train("Maxent", qubi_train, folds=cv, progress=TRUE)
+cat("Training TSS: ", auc(maxent_all))
+selected_variables_model <- varSel(maxent_all, metric = "auc",test=qubi_test,bg4cor = bgSWD, method = "spearman", cor_th = 0.7, permut = 1,progress=TRUE,use_pc=TRUE)
+va<-varImp(selected_variables_model)
+plotVarImp(va)
+#reduced_variables_model
+cat("Training AUC: ", auc(reduced_variables_model))
+cat("Testing AUC: ", auc(reduced_variables_model, test = qubi_test))
+cat("Training TSS: ", tss(reduced_variables_model))
+cat("Testing TSS: ", tss(reduced_variables_model, test = qubi_test))
+h_max <- list(reg = seq(0.2,2,0.2), fc = c("l", "lq", "lh", "lqp", "lqph", "lqpht"), iter= seq(300,1500,200))
+# Test all the possible combinations with gridSearch
+gs_maxall<- gridSearch(selected_variables_model, hypers = h_max, metric = "tss", save_models=FALSE, interactive=TRUE)
+head(gs_maxall@results[order(-gs_maxall@results$train_TSS), ])  # Best combinations
+gs_maxall@results[order(-gs_maxall@results$test_TSS), ]  # Best combinations
+gs_maxall@results$sum<-gs_maxall@results$train_TSS+gs_maxall@results$test_TSS
+head(gs_maxall@results[order(-gs_maxall@results$sum), ])  # Best combinations
+index <- which.max(gs_max@results$test_TSS)
+vars<-c(bioclim_qubi$wc2.1_2.5m_bio_2 ,bioclim_qubi$wc2.1_2.5m_bio_6 ,bioclim_qubi$wc2.1_2.5m_bio_8 ,bioclim_qubi$wc2.1_2.5m_bio_5 ,bioclim_qubi$wc2.1_2.5m_bio_15 ,bioclim_qubi$wc2.1_2.5m_bio_18)
+data<-prepareSWD("quercusbicolor", vars, p=qubi_pres, a=qubi_bg)
+c(qubi_train, qubi_test) %<-% trainValTest(data, 
+                                           test = 0.2, 
+                                           only_presence = TRUE, 
+                                           seed = 39)
+#parition training data
+cv<-randomFolds(qubi_train, k=10, only_presence= TRUE)
+#select optimal parameters
+max_finalcv<-train("Maxent", 
+                   data = qubi_train,
+                   folds=cv,
+                   fc = "lqpht", 
+                   reg = 0.6,
+                   iter = 900)
+max_final_qubi<-combineCV(max_finalcv)
+cat("Training AUC: ", auc(max_final_qubi))
+cat("Testing AUC: ", auc(max_final_qubi, test = qubi_test))
+cat("Training TSS: ", tss(max_final_qubi))
+cat("Testing TSS: ", tss(max_final_qubi, test = qubi_test))
+setwd("D:/data/wc2.1_30s_bio/raw_rasters_touse/QUBI_and_QULY/modeling_outputs")
+getwd()
+final_max_modelreport<-modelReport(max_final_qubi, folder="maxmodelreport", test = qubi_test,type = "cloglog",response_curves = TRUE,only_presence = TRUE,jk = TRUE,env = vars, clamp = TRUE, permut = 10,verbose = TRUE)
+#get paleo data
+output_folder <-"D:/data/paleoclimate/"
+files <- list.files(output_folder, pattern = "\\.tif$", full.names = TRUE)
+nontemp<-rast(files)
+pal<-temp/10
+paleo<-c(pal,nontemp)
+
+paleo<-project(paleo, bioclimc, method= 'bilinear', mask=TRUE)
+crs(paleo)==crs(bioclimc) #if no, will need to re project
+ext(paleo)==ext(bioclimc)
+plot(paleo$cclgmbi1)
+names(paleo)<-c("wc2.1_2.5m_bio_1", "wc2.1_2.5m_bio_10", "wc2.1_2.5m_bio_11","wc2.1_2.5m_bio_2" ,"wc2.1_2.5m_bio_3","wc2.1_2.5m_bio_4","wc2.1_2.5m_bio_5","wc2.1_2.5m_bio_6" ,"wc2.1_2.5m_bio_7","wc2.1_2.5m_bio_8","wc2.1_2.5m_bio_9","wc2.1_2.5m_bio_12","wc2.1_2.5m_bio_13", "wc2.1_2.5m_bio_14", "wc2.1_2.5m_bio_15", "wc2.1_2.5m_bio_16", "wc2.1_2.5m_bio_17", "wc2.1_2.5m_bio_18", "wc2.1_2.5m_bio_19")
+writeRaster(paleo,"LGMclimate_temp_converted.tif", overwrite=TRUE)
+max_predict_qubi_current<- SDMtune::predict(object=max_final_qubi, data=bioclimc, filename = "max_predict_qubi_current_fullrange.tif", overwrite=TRUE)
+max_predict_qubi_LGM<- SDMtune::predict(object=max_final_qubi, data=paleo, filename = "max_predict_qubi_LGM.tif", overwrite=TRUE)
+plot(max_predict_qubi_current)
+plot(max_predict_qubi_LGM)
+
+#get interglacial data
+output_folder <-"D:/data/interglacialclimate/temp"
+list.files(output_folder)
+files <- list.files(output_folder, pattern = "\\.bil$", full.names = TRUE)
+nontemp<-rast(files)
+int<-interglacial/10
+interglacial<-c(int, nontemp)
+plot(interglacial$lig_30s_bio_1)
+crs(interglacial)==crs(bioclimc) #is false proceed with next 2 lines
+interglacial<-project(interglacial, bioclimc, method= 'bilinear', mask=TRUE)
+names(interglacial)<-c("wc2.1_2.5m_bio_1", "wc2.1_2.5m_bio_10", "wc2.1_2.5m_bio_11","wc2.1_2.5m_bio_2" ,"wc2.1_2.5m_bio_3","wc2.1_2.5m_bio_4","wc2.1_2.5m_bio_5","wc2.1_2.5m_bio_6" ,"wc2.1_2.5m_bio_7","wc2.1_2.5m_bio_8","wc2.1_2.5m_bio_9","wc2.1_2.5m_bio_12","wc2.1_2.5m_bio_13", "wc2.1_2.5m_bio_14", "wc2.1_2.5m_bio_15", "wc2.1_2.5m_bio_16", "wc2.1_2.5m_bio_17", "wc2.1_2.5m_bio_18", "wc2.1_2.5m_bio_19")
+plot(interglacial$wc2.1_2.5m_bio_1)
+writeRaster(interglacial,"interglacial_converted.tif", overwrite=TRUE)
+#predict
+setwd()
+max_predict_qubi_IG<- SDMtune::predict(object=max_final_qubi, data=interglacial, filename = "max_predict_qubi_IG.tif", overwrite=TRUE)
+plot(max_predict_qubi_IG)
+
+#get midholocene data
+output_folder <-"D:/data/midholocene/"
+list.files(output_folder)
+files <- list.files(output_folder, pattern = "\\.tif$", full.names = TRUE)
+nontemp<-rast(files)
+int<-temp/10
+midhol<-c(int, nontemp)
+crs(midhol)==crs(bioclimc) #is false proceed with next 2 lines
+midhol<-project(midhol, bioclimc, method= 'bilinear', mask=TRUE)
+names(midhol)<-c("wc2.1_2.5m_bio_1", "wc2.1_2.5m_bio_10", "wc2.1_2.5m_bio_11","wc2.1_2.5m_bio_2" ,"wc2.1_2.5m_bio_3","wc2.1_2.5m_bio_4","wc2.1_2.5m_bio_5","wc2.1_2.5m_bio_6" ,"wc2.1_2.5m_bio_7","wc2.1_2.5m_bio_8","wc2.1_2.5m_bio_9","wc2.1_2.5m_bio_12","wc2.1_2.5m_bio_13", "wc2.1_2.5m_bio_14", "wc2.1_2.5m_bio_15", "wc2.1_2.5m_bio_16", "wc2.1_2.5m_bio_17", "wc2.1_2.5m_bio_18", "wc2.1_2.5m_bio_19")
+plot(midhol$wc2.1_2.5m_bio_1)
+writeRaster(midhol,"midhol_converted.tif", overwrite=TRUE)
+#predict
+setwd()
+max_predict_qubi_midhol<- SDMtune::predict(object=max_final_qubi, data=midhol, filename = "max_predict_qubi_midholocene.tif", overwrite=TRUE)
+plot(max_predict_qubi_midhol)
+
+##model OVERCUP OAK
+bioclim_quly<-crop(bioclim, quly_buf150, mask=TRUE)
+quly_bg<- terra::spatSample(bioclim_quly, size = 10000, method = "random", na.rm = TRUE,xy = TRUE,values = FALSE)
+quly_pres<-geom(quly)[,c('x','y')] %>% as.data.frame()
+quly_bg<-quly_bg %>% as.data.frame()
+quly_pres<-thinData(quly_pres, bioclim_quly, x= 'x', y='y')
+quly_bg<-thinData(quly_bg, bioclim_quly, x= 'x', y='y')
+bg<- terra::spatSample(bioclim_quly, size = 10000, method = "random", na.rm = TRUE,xy = TRUE,values = FALSE)
+bgSWD<-prepareSWD("background",bioclim_quly, p=NULL,a=bg)
+data<-prepareSWD("quercuslyrata", bioclim_quly, p=quly_pres, a=quly_bg )
+c(quly_train, quly_test) %<-% trainValTest(data, 
+                                           test = 0.15, 
+                                           only_presence = TRUE, 
+                                           seed = 33)
+
+#parition training data
+cv<-randomFolds(quly_train, k=10, only_presence= TRUE)
+#create maxent model with default values
+maxent_quly<-train("Maxent", quly_train, folds=cv, progress=TRUE)
+selected_variables_model_quly <- varSel(maxent_quly, metric = "auc",test=quly_test,bg4cor = bgSWD, method = "spearman", cor_th = 0.7, permut = 1,progress=TRUE,use_pc=TRUE)
+vars_quly<-c(bioclim_quly$wc2.1_2.5m_bio_10 ,bioclim_quly$wc2.1_2.5m_bio_13 ,bioclim_quly$wc2.1_2.5m_bio_15 ,bioclim_quly$wc2.1_2.5m_bio_17 ,bioclim_quly$wc2.1_2.5m_bio_18 ,bioclim_quly$wc2.1_2.5m_bio_2, bioclim_quly$wc2.1_2.5m_bio_3, bioclim_quly$wc2.1_2.5m_bio_8)
+#reduced_variables_model
+h_max <- list(reg = seq(0.2,2,0.2), fc = c("l", "lq", "lh", "lqp", "lqph", "lqpht"), iter= seq(300,1500,200))
+# Test all the possible combinations with gridSearch
+gs_max_quly<- gridSearch(selected_variables_model, hypers = h_max, metric = "tss", save_models=FALSE, interactive=TRUE)
+head(gs_max_quly@results[order(gs_max_quly@results$diff_TSS), ])  # Best combinations
+head(gs_max_quly@results[order(-gs_max_quly@results$train_TSS), ])  # Best combinations
+head(gs_max_quly@results[order(-gs_max_quly@results$test_TSS), ])  # Best combinations
+gs_max_quly@results$sum<-gs_max_quly@results$train_TSS+gs_max_quly@results$test_TSS
+head(gs_max_quly@results[order(-gs_max_quly@results$sum), ])  # Best combinations
+#select optimal parameters
+data<-prepareSWD("quercuslyrata", vars_quly, p=quly_pres, a=quly_bg )
+c(quly_train, quly_test) %<-% trainValTest(data, 
+                                           test = 0.2, 
+                                           only_presence = TRUE, 
+                                           seed = 39)
+
+#parition training data
+cv<-randomFolds(quly_train, k=10, only_presence= TRUE)
+max_finalcv_quly<-train("Maxent", 
+                   data = quly_train,
+                   folds=cv,
+                   fc = "lqpht", 
+                   reg = 0.6,
+                   iter = 900)
+max_final_quly<-combineCV(max_finalcv_quly)
+cat("Training AUC: ", auc(max_final_quly))
+cat("Testing AUC: ", auc(max_final_quly, test = quly_test))
+cat("Training TSS: ", tss(max_final_quly))
+cat("Testing TSS: ", tss(max_final_quly, test = quly_test))
+setwd("D:/data/wc2.1_30s_bio/raw_rasters_touse/QUBI_and_QULY/modeling_outputs")
+final_max_modelreport<-modelReport(max_final_quly, folder="max_final_quly_modreport", test = quly_test,type = "cloglog",response_curves = TRUE,only_presence = TRUE,jk = TRUE,env = vars_quly, clamp = TRUE, permut = 10,verbose = TRUE)
+#get paleo data for overcup
+max_predict_quly_current<- SDMtune::predict(object=max_final_quly, data=bioclimc, filename = "max_predict_quly_current.tif", overwrite=TRUE)
+max_predict_quly_LGM<- SDMtune::predict(object=max_final_quly, data=paleo, filename = "max_predict_quly_LGM.tif", overwrite=TRUE)
+max_predict_quly_IG<- SDMtune::predict(object=max_final_quly, data=interglacial, filename = "max_predict_quly_IG.tif", overwrite=TRUE)
+max_predict_quly_midhol<- SDMtune::predict(object=max_final_quly, data=midhol, filename = "max_predict_quly_midholocene.tif", overwrite=TRUE)
+plot(max_predict_quly_midhol)
+plot(max_predict_qubi_midhol)
+plot(max_predict_quly_LGM)
+plot(max_predict_qubi_LGM)
+plot(max_predict_quly_IG)
+plot(max_predict_qubi_IG)
+plot(max_predict_qubi_current)
+plot(max_predict_quly_current)
+library(geodata)
+us <- gadm(country = "USA", level = 2, resolution = 2, path=getwd())
+ten<-us[us$NAME_1=="Tennessee"]
+plot(ten, add=TRUE)
+
+#get future climate
+fut<-rast("D:/data/future_climate/wc2.1_30s_bioc_EC-Earth3-Veg_ssp585_2041-2060.tif")
+crs(fut)==crs(bioclimc)
+names(fut)=c("wc2.1_2.5m_bio_1", "wc2.1_2.5m_bio_2",  "wc2.1_2.5m_bio_3",  "wc2.1_2.5m_bio_4",  "wc2.1_2.5m_bio_5", "wc2.1_2.5m_bio_6",  "wc2.1_2.5m_bio_7",  "wc2.1_2.5m_bio_8",  "wc2.1_2.5m_bio_9", "wc2.1_2.5m_bio_10", "wc2.1_2.5m_bio_11", "wc2.1_2.5m_bio_12", "wc2.1_2.5m_bio_13","wc2.1_2.5m_bio_14", "wc2.1_2.5m_bio_15", "wc2.1_2.5m_bio_16", "wc2.1_2.5m_bio_17", "wc2.1_2.5m_bio_18", "wc2.1_2.5m_bio_19" )
+fut<-crop(fut, bioclimc)
+max_predict_quly_2050<- SDMtune::predict(object=max_final_quly, data=fut, filename = "max_predict_quly_fut_2050_ssp585_ecearth3veg.tif", overwrite=TRUE)
+max_predict_qubi_2050<- SDMtune::predict(object=max_final_qubi, data=fut, filename = "max_predict_qubi_fut_2050_ssp585_ecearth3veg.tif", overwrite=TRUE)
+plot(max_predict_qubi_2050)
+plot(max_predict_quly_current)
+
+
+#test with all bioclim variables qubi
+data<-prepareSWD("quercusbicolor", bioclim_qubi, p=qubi_pres, a=qubi_bg )
+c(qubi_train_all, qubi_test_all) %<-% trainValTest(data, 
+                                           test = 0.2, 
+                                           only_presence = TRUE, 
+                                           seed = 42)
+#parition training data
+cv<-randomFolds(qubi_train_all, k=10, only_presence= TRUE)
+#create maxent model with default values
+maxent_allBC_qubi<-train("Maxent", qubi_train_all, folds=cv, progress=TRUE)
+max_allBC_qubi<-combineCV(maxent_allBC_qubi)
+cat("Training AUC: ", auc(maxent_allBC_qubi))
+cat("Testing AUC: ", auc(maxent_allBC_qubi, test = qubi_test_all))
+cat("Training TSS: ", tss(maxent_allBC_qubi))
+cat("Testing TSS: ", tss(maxent_allBC_qubi, test = qubi_test_all))
+setwd("D:/data/wc2.1_30s_bio/raw_rasters_touse/QUBI_and_QULY/modeling_outputs")
+allBC_max_modelreport<-modelReport(max_allBC_qubi, folder="max_allBC_qubi_modreport", test = qubi_test_all, type = "cloglog",response_curves = TRUE,only_presence = TRUE,jk = TRUE,env = bioclim_qubi, clamp = TRUE, permut = 10,verbose = TRUE)
+
+#test with all bioclim variables quly
+data<-prepareSWD("quercuslyrata", bioclim_quly, p=quly_pres, a=quly_bg )
+c(quly_train_all, quly_test_all) %<-% trainValTest(data, 
+                                                   test = 0.2, 
+                                                   only_presence = TRUE, 
+                                                   seed = 42)
+#parition training data
+cv<-randomFolds(quly_train_all, k=10, only_presence= TRUE)
+#create maxent model with default values
+maxent_allBC_quly<-train("Maxent", quly_train_all, folds=cv, progress=TRUE)
+max_allBC_quly<-combineCV(maxent_allBC_quly)
+setwd("D:/data/wc2.1_30s_bio/raw_rasters_touse/QUBI_and_QULY/modeling_outputs")
+allBC_quly_max_modelreport<-modelReport(max_allBC_quly, folder="max_allBC_quly_modreport", test = quly_test_all,type = "cloglog",response_curves = TRUE,only_presence = TRUE,jk = TRUE,env = bioclim_quly, clamp = TRUE, permut = 10,verbose = TRUE)
+
+
+
+max_predict_allBC_quly_current<- SDMtune::predict(object=max_allBC_quly, data=bioclimc, filename = "max_allBC_predict_quly_current.tif", overwrite=TRUE)
+max_predict_allBC_quly_LGM<- SDMtune::predict(object=max_allBC_quly, data=paleo, filename = "max_allBC_predict_quly_LGM.tif", overwrite=TRUE)
+max_predict_allBC_quly_IG<- SDMtune::predict(object=max_allBC_quly, data=interglacial, filename = "max_allBC_predict_quly_IG.tif", overwrite=TRUE)
+max_predict_allBC_quly_midhol<- SDMtune::predict(object=max_allBC_quly, data=midhol, filename = "max_allBC_predict_quly_midholocene.tif", overwrite=TRUE)
+
+max_predict_allBC_qubi_current<- SDMtune::predict(object=max_allBC_qubi, data=bioclimc, filename = "max_allBC_predict_qubi_current.tif", overwrite=TRUE)
+max_predict_allBC_qubi_LGM<- SDMtune::predict(object=max_allBC_qubi, data=paleo, filename = "max_allBC_predict_qubi_LGM.tif", overwrite=TRUE)
+max_predict_allBC_qubi_IG<- SDMtune::predict(object=max_allBC_qubi, data=interglacial, filename = "max_allBC_predict_qubi_IG.tif", overwrite=TRUE)
+max_predict_allBC_qubi_midhol<- SDMtune::predict(object=max_allBC_qubi, data=midhol, filename = "max_allBC_predict_qubi_midholocene.tif", overwrite=TRUE)
+plot(max_predict_allBC_quly_midhol)
+plot(max_predict_allBC_qubi_midhol)
+plot(max_predict_allBC_quly_LGM)
+plot(max_predict_allBC_qubi_LGM)
+plot(max_predict_allBC_quly_IG)
+plot(max_predict_allBC_qubi_IG)
+plot(max_predict_allBC_qubi_current)
+plot(max_predict_allBC_quly_current)
+max_predict_allBC_quly_2050<- SDMtune::predict(object=max_allBC_quly, data=fut, filename = "max_allBC_predict_quly_fut_2050_ssp585_ecearth3veg.tif", overwrite=TRUE)
+max_predict_allBC_qubi_2050<- SDMtune::predict(object=max_allBC_qubi, data=fut, filename = "max_allBC_predict_qubi_fut_2050_ssp585_ecearth3veg.tif", overwrite=TRUE)
+plot(max_predict_allBC_qubi_2050)
+plot(max_predict_allBC_quly_2050)
+
+#get threhsolds (max training sens+spec)
+ths_qubi<-SDMtune::thresholds(model=max_allBC_qubi, test=qubi_test_all)
+write.csv(ths_qubi,"D:/data/wc2.1_30s_bio/raw_rasters_touse/QUBI_and_QULY/modeling_outputs/thresholds_allBC_qubi.csv")
+
+ths_quly<-SDMtune::thresholds(model=max_allBC_quly, test=quly_test_all)
+write.csv(ths_quly,"D:/data/wc2.1_30s_bio/raw_rasters_touse/QUBI_and_QULY/modeling_outputs/thresholds_allBC_quly.csv")
+
+thr_qubi<-max_allBC_qubi@model@results['X10.percentile.training.presence.Cloglog.threshold',1]
+thr_quly<-max_allBC_quly@model@results['X10.percentile.training.presence.Cloglog.threshold',1]
+
+max_predict_allBC_qubi_current %>% { . > thr_qubi } %>% writeRaster(., "QUBI_current_binary.tif", overwrite=TRUE)
+max_predict_allBC_qubi_LGM %>% { . > thr_qubi } %>% writeRaster(., "QUBI_LGM_binary.tif", overwrite=TRUE)
+max_predict_allBC_qubi_IG %>% { . > thr_qubi } %>% writeRaster(., "QUBI_IG_binary.tif", overwrite=TRUE)
+max_predict_allBC_qubi_midhol %>% { . > thr_qubi } %>% writeRaster(., "QUBI_midhol_binary.tif", overwrite=TRUE)
+max_predict_allBC_qubi_2050 %>% { . > thr_qubi } %>% writeRaster(., "QUBI_2050_binary.tif", overwrite=TRUE)
+
+max_predict_allBC_quly_current %>% { . > thr_quly } %>% writeRaster(., "QULY_current_binary.tif", overwrite=TRUE)
+max_predict_allBC_quly_LGM %>% { . > thr_quly } %>% writeRaster(., "QULY_LGM_binary.tif", overwrite=TRUE)
+max_predict_allBC_quly_IG %>% { . > thr_quly } %>% writeRaster(., "QULY_IG_binary.tif", overwrite=TRUE)
+max_predict_allBC_quly_midhol %>% { . > thr_quly } %>% writeRaster(., "QULY_midhol_binary.tif", overwrite=TRUE)
+max_predict_allBC_quly_2050 %>% { . > thr_quly } %>% writeRaster(., "QULY_2050_binary.tif", overwrite=TRUE)
+
+
+
+
+
+# Define colors: # 0 (Neither) = White # 1 (QUBI only) = Blue # 2 (QULY only) = Green # 3 (Both) = Purple
+setwd("D:/data/wc2.1_30s_bio/raw_rasters_touse/QUBI_and_QULY/modeling_outputs")
+colors <- c("white", "blue", "green", "purple")
+library(terra)
+quly_fut<-rast("QULY_2050_binary.tif")
+qubi_fut<-rast("QUBI_2050_binary.tif")
+
+quly_current<-rast("QULY_current_binary.tif")
+qubi_current<-rast("QUBI_current_binary.tif")
+
+quly_midhol<-rast("QULY_midhol_binary.tif")
+qubi_midhol<-rast("QUBI_midhol_binary.tif")
+
+quly_lgm<-rast("QULY_LGM_binary.tif")
+qubi_lgm<-rast("QUBI_LGM_binary.tif")
+
+quly_ig<-rast("QULY_IG_binary.tif")
+qubi_ig<-rast("QUBI_IG_binary.tif")
+ig_overlap <- qubi_ig * 1 + quly_ig * 2  
+
+# Plot the maps
+# Load libraries
+library(terra)
+library(ggplot2)
+library(sf)
+library(geodata)
+df <- as.data.frame(ig_overlap, xy=TRUE)
+colnames(df) <- c("x", "y", "presence")
+# Define color mapping
+color_mapping <- c("0" = "white", "1" = "blue", "2" = "green", "3" = "purple")
+# Load US states boundaries from geodata
+us_states <- gadm("USA", level=1, path=tempdir())  # Level 1 = states
+us_sf <- st_as_sf(us_states)
+can<-gadm("Canada", level=0, path=tempdir())
+can_sf <- st_as_sf(can)
+raster_extent <- st_as_sfc(st_bbox(c(xmin=min(df$x), xmax=max(df$x), ymin=min(df$y), ymax=max(df$y)), crs=st_crs(us_sf)))
+# Clip US states to raster extent
+can_sf_clipped <- st_crop(can_sf, raster_extent)
+us_sf_clipped <- st_crop(us_sf, raster_extent)
+canusa<-merge(us_sf_clipped,can_sf_clipped)
+single_sf <- dplyr::bind_rows(list(us_sf_clipped,can_sf_clipped))
+dissolve_sf <- st_union(single_sf)
+
+ig_overlap_map<-ggplot() +
+  geom_raster(data=df, aes(x=x, y=y, fill=factor(presence))) +
+  scale_fill_manual(
+    values=color_mapping, 
+    name="Species Presence",
+    labels=c(expression("None"), 
+             expression(italic("Quercus bicolor")), 
+             expression(italic("Quercus lyrata")), 
+             expression("Hybrid Zone"))
+  ) +
+  geom_sf(data=us_sf_clipped, fill=NA, color="black", size=0.5) +
+  coord_sf(xlim=c(min(df$x), max(df$x)), ylim=c(min(df$y), max(df$y))) +
+  labs(title="Interglacial (~130,000 years BP) Overlap Map", x="Longitude", y="Latitude") +
+  theme_minimal()+
+  theme(
+    text = element_text(family="mono"),             # Set all text to monospace
+    title = element_text(family="mono"),            # Monospace for title
+    axis.title = element_text(family="mono"),       # Monospace for axis labels
+    axis.text = element_text(family="mono"),        # Monospace for axis ticks
+    legend.text = element_text(family="mono"), 
+    legend.title = element_text(family="mono")      # Monospace for legend title
+  )
+
+
+lgm_overlap <- qubi_lgm * 1 + quly_lgm * 2  
+freq(lgm_overlap)
+r_area <- cellSize(lgm_overlap, unit = "km")
+mask_r <- lgm_overlap == 3
+area_hyb <- global(r_area * mask_r, fun = "sum", na.rm = TRUE)
+mask_r <- lgm_overlap != 0
+area_tot <- global(r_area * mask_r, fun = "sum", na.rm = TRUE)
+lgm_df<-c(area_hyb, area_tot) %>% as.data.frame() 
+colnames(lgm_df)<-c("hybrid_area","total_area_occupied")
+
+
+print(area_3)
+
+lgm_overlap<-crop(lgm_overlap, dissolve_sf)
+df <- as.data.frame(lgm_overlap, xy=TRUE)
+colnames(df) <- c("x", "y", "presence")
+# Define color mapping
+lgm_overlap_map<-ggplot() +
+  geom_raster(data=df, aes(x=x, y=y, fill=factor(presence))) +
+  scale_fill_manual(
+    values=color_mapping, 
+    name="Species Presence",
+    labels=c(expression("None"), 
+             expression(italic("Quercus bicolor")), 
+             expression(italic("Quercus lyrata")), 
+             expression("Hybrid Zone"))
+  ) +
+  geom_sf(data=us_sf_clipped, fill=NA, color="black", size=0.5) +
+  geom_sf(data=dissolve_sf, fill='white', color="black", size=0.5) +
+  coord_sf(xlim=c(min(df$x), max(df$x)), ylim=c(min(df$y), max(df$y))) +
+  labs(title="Last Glacial Maximum (~22,000 years BP) Climate", x="Longitude", y="Latitude") +
+  theme_minimal()+
+  theme(
+    text = element_text(family="mono"),             # Set all text to monospace
+    title = element_text(family="mono"),            # Monospace for title
+    axis.title = element_text(family="mono"),       # Monospace for axis labels
+    axis.text = element_text(family="mono"),        # Monospace for axis ticks
+    legend.text = element_text(family="mono"), 
+    legend.title = element_text(family="mono")      # Monospace for legend title
+  )
+
+midhol_overlap <- qubi_midhol * 1 + quly_midhol * 2  
+freq(midhol_overlap)
+r_area <- cellSize(midhol_overlap, unit = "km")
+mask_r <- midhol_overlap == 3
+area_hyb <- global(r_area * mask_r, fun = "sum", na.rm = TRUE)
+mask_r <- midhol_overlap != 0
+area_tot <- global(r_area * mask_r, fun = "sum", na.rm = TRUE)
+midhol_df<-c(area_hyb, area_tot) %>% as.data.frame() 
+colnames(midhol_df)<-c("hybrid_area","total_area_occupied")
+
+
+r_area <- cellSize(current_overlap, unit = "km")
+mask_r <- current_overlap == 3
+area_hyb <- global(r_area * mask_r, fun = "sum", na.rm = TRUE)
+mask_r <- current_overlap != 0
+area_tot <- global(r_area * mask_r, fun = "sum", na.rm = TRUE)
+current_df<-c(area_hyb, area_tot) %>% as.data.frame() 
+colnames(current_df)<-c("hybrid_area","total_area_occupied")
+
+
+df <- as.data.frame(midhol_overlap, xy=TRUE)
+colnames(df) <- c("x", "y", "presence")
+# Define color mapping
+midhol_overlap_map<-ggplot() +
+  geom_raster(data=df, aes(x=x, y=y, fill=factor(presence))) +
+  scale_fill_manual(
+    values=color_mapping, 
+    name="Species Presence",
+    labels=c(expression("None"), 
+             expression(italic("Quercus bicolor")), 
+             expression(italic("Quercus lyrata")), 
+             expression("Hybrid Zone"))
+  ) +
+  geom_sf(data=us_sf_clipped, fill=NA, color="black", size=0.5) +
+  coord_sf(xlim=c(min(df$x), max(df$x)), ylim=c(min(df$y), max(df$y))) +
+  labs(title="Mid-Holocene (~6,000 years BP) Climate", x="Longitude", y="Latitude") +
+  theme_minimal()+
+  theme(
+    text = element_text(family="mono"),             # Set all text to monospace
+    title = element_text(family="mono"),            # Monospace for title
+    axis.title = element_text(family="mono"),       # Monospace for axis labels
+    axis.text = element_text(family="mono"),        # Monospace for axis ticks
+    legend.text = element_text(family="mono"), 
+    legend.title = element_text(family="mono")      # Monospace for legend title
+  )
+
+current_overlap <- qubi_current * 1 + quly_current * 2  
+freq(current_overlap)
+r_area <- cellSize(current_overlap, unit = "km")
+mask_r <- current_overlap == 3
+area_hyb <- global(r_area * mask_r, fun = "sum", na.rm = TRUE)
+mask_r <- current_overlap != 0
+area_tot <- global(r_area * mask_r, fun = "sum", na.rm = TRUE)
+current_df<-c(area_hyb, area_tot) %>% as.data.frame() 
+colnames(current_df)<-c("hybrid_area","total_area_occupied")
+
+df <- as.data.frame(current_overlap, xy=TRUE)
+colnames(df) <- c("x", "y", "presence")
+# Define color mapping
+current_overlap_map<-ggplot() +
+  geom_raster(data=df, aes(x=x, y=y, fill=factor(presence))) +
+  scale_fill_manual(
+    values=color_mapping, 
+    name="Species Presence",
+    labels=c(expression("None"), 
+             expression(italic("Quercus bicolor")), 
+             expression(italic("Quercus lyrata")), 
+             expression("Hybrid Zone"))
+  ) +
+  geom_sf(data=us_sf_clipped, fill=NA, color="black", size=0.5) +
+  coord_sf(xlim=c(min(df$x), max(df$x)), ylim=c(min(df$y), max(df$y))) +
+  labs(title="1970-2000 Climate", x="Longitude", y="Latitude") +
+  theme_minimal()+
+  theme(
+    text = element_text(family="mono"),             # Set all text to monospace
+    title = element_text(family="mono"),            # Monospace for title
+    axis.title = element_text(family="mono"),       # Monospace for axis labels
+    axis.text = element_text(family="mono"),        # Monospace for axis ticks
+    legend.text = element_text(family="mono"), 
+    legend.title = element_text(family="mono")      # Monospace for legend title
+  )
+
+fut_overlap <- qubi_fut * 1 + quly_fut * 2  
+r_area <- cellSize(fut_overlap, unit = "km")
+mask_r <- fut_overlap == 3
+area_hyb <- global(r_area * mask_r, fun = "sum", na.rm = TRUE)
+mask_r <- fut_overlap != 0
+area_tot <- global(r_area * mask_r, fun = "sum", na.rm = TRUE)
+fut_df<-c(area_hyb, area_tot) %>% as.data.frame() 
+colnames(fut_df)<-c("hybrid_area","total_area_occupied")
+
+df <- as.data.frame(fut_overlap, xy=TRUE)
+colnames(df) <- c("x", "y", "presence")
+# Define color mapping
+fut_overlap_map<-ggplot() +
+  geom_raster(data=df, aes(x=x, y=y, fill=factor(presence))) +
+  scale_fill_manual(
+    values=color_mapping, 
+    name="Species Presence",
+    labels=c(expression("None"), 
+             expression(italic("Quercus bicolor")), 
+             expression(italic("Quercus lyrata")), 
+             expression("Hybrid Zone"))
+  ) +
+  geom_sf(data=us_sf_clipped, fill=NA, color="black", size=0.5) +
+  coord_sf(xlim=c(min(df$x), max(df$x)), ylim=c(min(df$y), max(df$y))) +
+  labs(title="2050 Climate RCP 8.5", x="Longitude", y="Latitude") +
+  theme_minimal()+
+  theme(text = element_text(family="mono"),title = element_text(family="mono"),axis.title = element_text(family="mono"),axis.text = element_text(family="mono"),legend.text = element_text(family="mono"),legend.title = element_text(family="mono")    
+    )
+names<-c("lgm","midhol","current", "fut_df") 
+stats<-rbind(lgm_df,midhol_df,current_df,fut_df) %>% as.data.frame() 
+rownames(stats)<-names
+
+library(patchwork)
+library(ggplot2)
+library(gridExtra)
+library(grid)
+library(lattice)
+plot_combined<-arrangeGrob(lgm_overlap_map, midhol_overlap_map, current_overlap_map, fut_overlap_map, ncol = 2)
+# Save as PNG
+
+ggsave("hybridzone_maps.pdf", plot = plot_combined, width = 13, height = 13, dpi = 800)
+
+setwd("C:/Users/jpark107/OneDrive - University of Tennessee/Desktop/Genetics_swo")
+```
