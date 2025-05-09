@@ -1,14 +1,18 @@
-# get libraries
+#####################
+#     Libraries     #
+#####################
+
 library(adegenet)
 library(dartR)
 library(LEA)
 library(vcfR)
 library(poppr)
 
-# Fri Apr 18 09:02:59 2025 ------------------------------
+###########################
+#     Load Data Files     #
+###########################
 # navigate to folder that contains the STACKS "populations.snps.vcf" file output from the populations module
 setwd("Quercus_bicolor/data/STACKS/PopulationsAllSpecies/")
-
 vc<-read.vcfR("populations.snps.vcf")
 g<-vcfR2genlight(vc)
 g<-gl.compliance.check(g)
@@ -18,9 +22,10 @@ pops<-read.csv("Qbicolor_161_pops.csv", header=TRUE)
 pop<-pops$pop %>% as.factor()
 g@pop<-pop
 
-
-
-# Part 1: PCA plotting
+###########################
+#   Part 1: PCA plotting  #
+###########################
+# load additional libraries
 library(ggplot2)
 library(ggrepel)
 library(dplyr)
@@ -110,7 +115,7 @@ final_plot
 
 
 # Part 2: run sNMF in LEA
-setwd("Quercus_bicolor/data/)
+setwd("Quercus_bicolor/data/")
 gl2geno(g, outfile= "g_geno",outpath= getwd())
 names<-g@ind.names
 pop<-pops$pop

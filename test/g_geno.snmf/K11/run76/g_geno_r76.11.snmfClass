@@ -1,5 +1,0 @@
-new("snmfClass", directory = "K11/run76/", snmfClass.file = "g_geno_r76.11.snmfClass", 
-    K = 11L, run = 76L, CPU = 1L, seed = 244845478L, alpha = 10, 
-    percentage = 0.05, I = 0L, iterations = 1000000L, entropy = TRUE, 
-    tolerance = 1e-05, crossEntropy = 0.256924442489617, ploidy = 2L, 
-    Q.input.file = "", Q.output.file = "g_geno_r76.11.Q", G.output.file = "g_geno_r76.11.G")
