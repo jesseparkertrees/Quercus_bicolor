@@ -48,7 +48,7 @@ nano align_samples.sh
 
 ##### Modify script with the following:
 
-``` {.bash eval= FALSE}
+``` {.bash eval=FALSE}
 #!/bin/bash
 REF="./reference/GCA_036321655.1_ASM3632165v1_genomic.fna.gz"
 #Create an array of sample names (removes .1.fq.gz suffix)
@@ -69,7 +69,7 @@ done
 
 ##### Run script with:
 
-``` {.bash eval= FALSE}
+``` {.bash eval=FALSE}
 bash align_samples.sh
 ```
 
@@ -77,13 +77,13 @@ bash align_samples.sh
 
 #### 5. Run the STACKS gstacks module on all aligned samples
 
-``` {.bash eval= FALSE}
+``` {.bash eval=FALSE}
 stacks-2.68/gstacks -I ./align/ -M ./data/popmap_gstacks.txt --min-mapq 30 -O ./gstacks_out/ -t 8
 ```
 
 #### 6. Run the STACKS populations module
 
-``` {.bash eval="false"}
+``` {.bash eval=FALSE}
 mkdir gstacks_out/dataset1
 stacks-2.68/populations --in-path ./gstacks_out/ --popmap ./data/popmap_dataset1.txt --out-path ./data/STACKS/dataset1 -R 0.95 --min-gt-depth 5 --min-mac 3 --vcf --structure --ordered-export --write-single-snp
 
@@ -98,7 +98,7 @@ stacks-2.68/populations --in-path ./gstacks_out/ --popmap ./data/popmap_dataset2
 
 ## Composed of three main parts: PCA (using dartR package), sNMF (using LEA package), and Dsuite
 
-```{r eval= FALSE}
+```{r eval=FALSE}
 setwd("~/Quercus_bicolor/")
 ```
 
@@ -122,7 +122,7 @@ g@pop<-pop
 
 ## Perform principal components analysis and visualize
 
-```{r eval= FALSE}
+```{r eval=FALSE}
 library(ggplot2)
 library(ggrepel)
 library(dplyr)
@@ -211,7 +211,7 @@ final_plot
 
 ## Run sNMF in LEA
 
-```{r eval= FALSE}
+```{r eval=FALSE}
 setwd("~/Quercus_bicolor/data/")
 gl2geno(g, outfile= "g_geno",outpath= getwd())
 #detect admixture
@@ -232,7 +232,7 @@ q$pure<-q$V4>0.84
 write.csv(q,"qscores_k5.csv")
 ```
 #### Make txt file for STACKS populations with pure individuals for analysis in Part 4
-```{r eval= FALSE}
+```{r eval=FALSE}
 pure<-q[q$pure==TRUE,]
 #remove reference samples
 pure<-pure[pure$pop!='Ref. Sample-Q. bicolor',]
@@ -242,13 +242,14 @@ write.table(pure[,1:2], "pure.txt", sep="\t", row.names=FALSE, col.names=FALSE, 
 
 #### Then you can run STACKS again in the command line (from inside "Quercus_bicolor" directory) to generate another .vcf of the "pure" Q. bicolor individuals for part IV (below).
 
-``` {.bash eval= FALSE}
+``` {.bash eval=FALSE}
 stacks-2.68/populations --in-path ./data/STACKS/ --popmap ./data/pure.txt --out-path ./data/STACKS/dataset3/ -R 0.95 --min-gt-depth 5 --min-mac 3 --genepop --structure --ordered-export --write-single-snp
 ```
 
 ## Run Dsuite (command line) to get Patterson's D statistics
 #### First, generate new .vcf file with no missing data
-``` {.bash eval= FALSE}
+``` {.bash eval=FALSE}
+
 #generate new .vcf with no missing data
 stacks-2.68/populations --in-path ./data/STACKS/ --popmap ./data/popmap_dataset1.txt --out-path ./data/STACKS/Dsuite/ -R 1 --min-gt-depth 5 --min-mac 3 --vcf --ordered-export --write-single-snp
 
@@ -258,12 +259,12 @@ gzip populations.snps.vcf
 cd ~/Quercus_bicolor
 ```
 #### Then, run Dsuite
-``` {.bash eval= FALSE}
+``` {.bash eval=FALSE}
 # after installing Dsuite in main directory
 ./Dsuite/Build/Dsuite Dinvestigate -n ./data/dinvestigate1 ./data/STACKS/Dsuite/populations.snps.vcf.gz ./data/SETS_2.txt ./data/test_trios_2.txt > ./data/dinvestigate1_output.txt 2> ./data/dinvestigate1_log.txt
 ```
 #### Convert raw Dsuite Dinvestigate output to dataframe
-```{r eval= FALSE}
+```{r eval=FALSE}
 # get file from Dsuite Dinvestigate
 setwd("~/Quercus_bicolor/")
 # Read in lines from output file
@@ -388,7 +389,7 @@ plot
 
 ## Analyze dataset 2 using sNMF
 
-```{r eval= FALSE}
+```{r eval=FALSE}
 vc<-read.vcfR("./data/STACKS/dataset2/populations.snps.vcf")
 g<-vcfR2genlight(vc)
 pm<-read.csv("./data/popmap_dataset2_version2.csv",header=TRUE)
@@ -418,14 +419,14 @@ q<-cbind(names, pop,q_scores) %>% as.data.frame()
 
 #### Convert "./data/STACKS/dataset2/populations.snps.vcf" to NEWHYBRIDS file using PGDSPider GUI program, then run:
 
-``` {.bash eval= FALSE}
+``` {.bash eval=FALSE}
 cd ~/Quercus_bicolor/data/NewHybrids/
 ./newhybrids-no-gui-linux.exe -d ./newhybrids_data.txt --no-gui --burn-in 50000 --num-sweeps 500000 --seeds 17 47
 ```
 
 #### Plot hybrid assignments in R
 
-```{r eval= FALSE}
+```{r eval=FALSE}
 setwd("~/Quercus_bicolor/")
 nhq<-read.csv("./data/NewHybrids/aa-PofZ.csv")
 library(dplyr)
@@ -464,15 +465,16 @@ dev.off()
 
 # III. Assess heterozygosity, Fst, Fis relative to Q. bicolor ancestry proportion (V4)
 
-#### get STACKS output for just the Qbicolor samples (exclude reference samples and those with higher missing data)
+#### get STACKS output for just the Qbicolor samples (exclude reference samples and those with higher missing data), run STACKS populations again just for these 135 samples
 
-```{r eval= FALSE}
-setwd("~/Quercus_bicolor/data/STACKS/dataset1/")
+```{r eval=FALSE}
+setwd("~/Quercus_bicolor/data/STACKS/dataset1/135")
 vc<-read.vcfR("populations.snps.vcf")
 g<-vcfR2genlight(vc)
 g<-gl.compliance.check(g)
 #filter to only include SNPs with callrate of 1 (can also be done within the STACKS populations module)
-g<-gl.filter.callrate(g, threshold=1)
+g<-gl.filter.callrate(g, threshold=1) #results in 7955 SNPs
+
 g@pop<-pops$pop[1:135] %>% as.factor()
 g@strata<-pops$pop2[1:135] %>% as.data.frame
 q<-read.csv("qscores_k5.csv")
@@ -637,7 +639,7 @@ plot
 
 #### Prepare data
 
-```{r eval= FALSE}
+```{r eval=FALSE}
 setwd("~/Quercus_bicolor/")
 vc<-read.vcfR("./data/STACKS/dataset3/populations.snps.vcf")
 g<-vcfR2genlight(vc)
@@ -652,7 +654,7 @@ g@other$latlon<-coords
 
 #### Run IBD on edge and core together
 
-```{r eval= FALSE}
+```{r eval=FALSE}
 ibd<-gl.ibd(g, coordinates="latlon")
 ibd
 #separate edge and core
@@ -665,7 +667,7 @@ ibd_core<-gl.ibd(core, coordinates="latlon")
 
 #### Run AMOVA
 
-```{r eval= FALSE}
+```{r eval=FALSE}
 amova<-gl.amova(g)
 amova_edge<-gl.amova(edge)
 amova_core<-gl.amova(core)
@@ -673,7 +675,7 @@ amova_core<-gl.amova(core)
 
 #### Run sNMF
 
-```{r eval= FALSE}
+```{r eval=FALSE}
 gl2geno(g, outfile= "g_geno",outpath= getwd())
 names<-g@ind.names
 #detect admixture
@@ -693,7 +695,7 @@ write.csv(q_pure,"qscores_k5_pure.csv")
 
 #### Get pop gen stats on Dataset 3
 
-```{r eval= FALSE}
+```{r eval=FALSE}
 #get ttests on het and fis fst values
 het<-gl.report.heterozygosity(g)
 div<-gl.report.diversity(g)
@@ -798,7 +800,7 @@ ltest$`Pr(>F)`/2
 
 ##### Prepare and check data in R
 
-```{r eval= FALSE}
+```{r eval=FALSE}
 vc<-read.vcfR("./data/STACKS/dataset2_NoMissing/populations.snps.vcf")
 g<-vcfR2genlight(vc)
 pm_treemix<-read.delim("./data/popmap_treemix.txt",header=FALSE)
@@ -832,7 +834,7 @@ cd ~/Quercus_bicolor/data/treemix
 
 ##### Plot treemix results in R
 
-```{r eval= FALSE}
+```{r eval=FALSE}
 source("~/Quercus_bicolor/treemix-1.13/treemix-1.13/src/plotting_funcs.R")
 setwd("~/Quercus_bicolor/data/treemix/treemix_out/")
 list.files(pattern='\\.modelcov.gz$')
@@ -845,7 +847,7 @@ plot_tree("~/Quercus_bicolor/data/treemix/treemix_out/out.1.6")
 
 #### Run Tess3r
 
-```{r eval= FALSE}
+```{r eval=FALSE}
 devtools::install_github("bcm-uga/TESS3_encho_sen")
 library(tess3r)
 #impute missing values
@@ -889,7 +891,7 @@ map<-map(database= "state", add = T, interior = T, col="grey",lwd=1)
 
 # Geospatial analysis
 
-```{r eval= FALSE}
+```{r eval=FALSE}
 library(dplyr)
 library(terra)
 library(SDMtune)
