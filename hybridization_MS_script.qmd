@@ -6,7 +6,7 @@ format:
     toc: true
     embed-resources: false
 ---
-
+## script for analyses in "EVALUATING THE CENTRAL-MARGINAL HYPOTHESIS: EVIDENCE FOR INCREASED INTROGRESSION AT THE TRAILING EDGE OF QUERCUS BICOLOR"
 ### Set-up: copy GitHub "Quercus_bicolor" repository to home directory
 
 # I. Processing raw RADseq data...command line
@@ -121,58 +121,151 @@ g@pop<-pop
 ```
 
 ## Perform principal components analysis and visualize
-
 ```{r eval=FALSE}
-library(ggplot2)
-library(ggrepel)
+# Perform PCA
+pca1 <- glPca(g, center=TRUE, scale=TRUE) # keep 7
+barplot(pca1$eig, main="eigenvalues", col=heat.colors(length(pca1$eig)))
+
+# Create a dataframe for plotting
+pca_df1 <- data.frame(
+  PC1 = pca1$scores[,1],
+  PC2 = pca1$scores[,2],
+  Population = as.factor(pop)
+)
+
+pca_df1$Population <- factor(pca_df1$Population, levels = c(
+  "Primary", "Primary (outlier)", setdiff(unique(pca_df1$Population), c("Primary", "Primary (outlier)"))
+))
+pca_df1[1,3] <- "Primary (outlier)"
+pca_df1$Population2<-1
+pca_df1$Population2 <- factor(pca_df1$Population2, levels = c("Primary", "Reference"))
+# Now you can assign it
+pca_df1[1:135,4] <- "Primary"
+pca_df1[136:161,4] <- "Reference"
+# Define the color palette
+library('viridis')
+color_palette1 <- c("purple4","purple4","#00308F", "magenta", "darkgreen", "#FF8000", "#A52A2A","green",  "cyan")
+# Select one representative per population for labeling
+pca_df1$Population <- as.character(pca_df1$Population)
+pca_label1 <- pca_df1 %>%
+  group_by(Population) %>%
+  dplyr::slice(1)
+
+# Merge to get label positions for each point
+pca_df1 <- pca_df1 %>% dplyr::left_join(pca_label1, by = "Population", suffix = c("", "_label"))
+
+# Variance explained (percentages for axis labels)
+var_exp1.1 <- round(100 * pca1$eig[1] / sum(pca1$eig), 2)
+var_exp2.1 <- round(100 * pca1$eig[2] / sum(pca1$eig), 2)
+
 library(dplyr)
 library(cowplot) 
+pca_plot1 <- ggplot(pca_df1, aes(x = PC1, y = PC2, color = Population, shape = Population2)) +
+  geom_point(size = 4, alpha = 0.8, show.legend = FALSE) +  # Removes color legend
+  scale_color_manual(values = color_palette1) +  
+  scale_shape_manual(values = c(16,17)) + 
+  geom_text_repel(
+    data = pca_label1,
+    aes(label = Population),
+    color = "black",
+    size = 5,
+    family = "mono",
+    max.overlaps = Inf,
+    nudge_x = 0.01 * (max(pca_df1$PC1) - min(pca_df1$PC1)),
+    nudge_y = 0.01 * (max(pca_df1$PC2) - min(pca_df1$PC2)),
+    force = 2,
+    segment.size = 0.7,
+    box.padding = 1.2,
+    show.legend = FALSE
+  ) +
+  theme_minimal() +  
+  theme(
+    panel.grid.major = element_line(color = "gray85", size = 0.1),
+    panel.grid.minor = element_line(color = "gray92", size = 0.1),
+    text = element_text(family = "mono", size = 18, color = 'black'),
+    legend.position = "right"
+  ) +
+  labs(
+    x = paste0("PC1 (", var_exp1.1, "% variance)"),
+    y = paste0("PC2 (", var_exp2.1, "% variance)")
+  )
+
+# Scree plot (eigenvalues barplot)
+scree_df1 <- data.frame(PC = 1:length(pca1$eig), Eigenvalue = pca1$eig)
+scree_plot1 <- ggplot(scree_df1, aes(x = PC, y = Eigenvalue)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  theme_minimal() +
+  theme(panel.grid.major = element_line(color = "gray85", size = 0),  # Lighter major grid lines
+        panel.grid.minor = element_line(color = "gray92", size = 0))+  
+  xlim(0,50)+
+  labs(title = "Scree Plot", x = "Principal Component", y = "Eigenvalue") +
+  theme(
+    plot.title = element_text(size = 10, hjust = 0.5, family = "mono"),
+    text = element_text(family = "mono", size = 10, color="black")
+  )
+
+# Combine PCA plot with Scree Plot in bottom corner
+final_plot1 <- ggdraw() +
+  draw_plot(pca_plot1) +
+  draw_plot(scree_plot1, x = .1, y = 0.1, width = 0.17, height = 0.25)
+final_plot1
+
+
+# Create second plot
+vc2<-read.vcfR("./data/STACKS/dataset2/populations.snps.vcf")
+g<-vcfR2genlight(vc2)
+g<-gl.compliance.check(g)
+names<-g@ind.names
+pops<-read.csv("./data/popmap_dataset2_version2.csv", header=TRUE)
+pop<-pops$pop %>% as.factor()
+g@pop<-pop
+g<-gl.compliance.check(g)
+#for just Qlyrata and Qbicolor, filter others out
+#glv<-gl.drop.ind(x=glv,ind.list=c("sample_1","SRR5284353_quma_NM","SRR5284354_quma_QUEBEC","SRR5284355_quma_IL","SRR5284356_quma_MO","SRR5632360_quma_ND","SRR5632409_quma_KS","SRR5284372_qual_MI", "SRR5284374_qual_NC","SRR5284375_qual_MN","SRR5284342_qumo_NC","SRR5284343_qumo_VA","SRR5284344_qumo_VA","SRR5632531_qumo_NC"  ,"SRR5284339_qumu_TX","SRR5284340_qumu_OK","SRR5284341_qumu_IL","SRR5632461_qumu_IL","SRR5632513_qust_NC","SRR5632603_qust_AL"), mono.rm=TRUE, recalc=TRUE)
+g@ind.names
+names<-g@ind.names
 # Perform PCA
 pca <- glPca(g, center=TRUE, scale=TRUE)
-#for all samples, keep 7
+#for 2spec just 9?
 barplot(pca$eig, main="eigenvalues", col=heat.colors(length(pca$eig)))
 # Create a dataframe for plotting
+
 pca_df <- data.frame(
   PC1 = pca$scores[,1],
   PC2 = pca$scores[,2],
   Population = as.factor(pop(g))  # Population as categorical variable
 )
-levels(pca_df[,3]) <- c(levels(pca_df[,3]), "Sample (outlier)")
-# Now you can assign it
-pca_df[1,3] <- "Sample (outlier)"
 
 # Define the color palette
-library('viridis')
-color_palette <- viridis(29, option='turbo') 
+color_palette<-c("purple","#4777EFFF" ,"#4686FBFF","#3BA0FDFF", "#28BBECFF", "#1AD3D1FF","#1AE4B6FF", "#31F299FF", "#56FA75FF", "#80FF53FF","#A2FC3CFF", "#BEF434FF", "#D9E436FF", "magenta",  "darkgreen")
+
+# Generates 28 colors
 # Select one representative per population for labeling
-pca_labels <- pca_df %>%
+pca_label <- pca_df %>%
   group_by(Population) %>%
-  slice(1)  # Take the first occurrence per population
+  dplyr::slice(2)  # Take the first occurrence per population
 
 # Merge to get label positions for each point
-pca_df <- pca_df %>%
-  left_join(pca_labels, by = "Population", suffix = c("", "_label"))
+pca_df <- pca_df %>% left_join(pca_label, by = "Population", suffix = c("", "_label"))
+levels(pca_df[,3]) <- c(levels(pca_df[,3]), "Ref. Q. bicolor", "Ref. Q. lyrata")
+pca_df[135:137,3]<-"Ref. Q. bicolor"
+pca_df[138:141,3]<-"Ref. Q. lyrata"
+
+
+pca_df$Population2 <- 1
+levels(pca_df[,6]) <- c("Primary", "Reference")
+# Now you can assign it
+pca_df[1:134,6] <- "Primary"
+pca_df[135:141,6] <- "Reference"
 
 # Variance explained (percentages for axis labels)
 var_exp1 <- round(100 * pca$eig[1] / sum(pca$eig), 2)
 var_exp2 <- round(100 * pca$eig[2] / sum(pca$eig), 2)
-pca_plot <- ggplot(pca_df, aes(x = PC1, y = PC2, color = Population)) +
-  #geom_segment(aes(x = PC1_label, y = PC2_label, xend = PC1, yend = PC2), 
-  #             color = "gray50", alpha = 0.5, linetype = "dotted") +  
-  geom_point(size = 4, alpha = 0.8) +  
-  geom_text_repel(
-    data = pca_labels,
-    aes(label = Population),
-    size = 5,
-    family = "mono",
-    max.overlaps = Inf,
-    nudge_x = 0.01 * (max(pca_df$PC1) - min(pca_df$PC1)),  
-    nudge_y = 0.01 * (max(pca_df$PC2) - min(pca_df$PC2)),  
-    force = 2,  
-    segment.size = 0.7,  
-    box.padding = 1.2,
-    show.legend = FALSE
-  ) +
+
+
+pca_plot <- ggplot(pca_df, aes(x = PC1, y = PC2, color = Population, shape=Population2)) +
+  geom_point(size = 4, alpha = 0.8) + 
+  scale_shape_manual(values = c(16,17)) + 
   scale_color_manual(values = color_palette) +  
   theme_minimal() +  
   theme(panel.grid.major = element_line(color = "gray85", size = 0.1),  # Lighter major grid lines
@@ -181,8 +274,8 @@ pca_plot <- ggplot(pca_df, aes(x = PC1, y = PC2, color = Population)) +
     text = element_text(family = "mono", size = 18, color='black'),  
     legend.position = "right"
   ) +
+  guides(color = guide_legend(override.aes = list(shape = c(rep(16, 13), 17, 17))),shape = guide_legend(override.aes = list(color = "black")))+
   labs(
-    title = "PCA of SNP data, Dataset 3",
     x = paste0("PC1 (", var_exp1, "% variance)"),
     y = paste0("PC2 (", var_exp2, "% variance)")
   ) +
@@ -203,10 +296,29 @@ scree_plot <- ggplot(scree_df, aes(x = PC, y = Eigenvalue)) +
   )
 
 # Combine PCA plot with Scree Plot in bottom corner
-final_plot <- ggdraw() +
+final_plot2 <- ggdraw() +
   draw_plot(pca_plot) +
   draw_plot(scree_plot, x = .1, y = 0.1, width = 0.17, height = 0.25)
-final_plot
+final_plot2
+
+# Combine final_plot1 and final_plot2
+library(patchwork)
+library(cowplot)
+library(ggplot2)
+# Use theme text with monospace font for labels
+pca_plot_labeled <- ggdraw(final_plot1) +
+  draw_plot_label("A", x = 0, y = 1, hjust = -0.5, vjust = 1.2, 
+                  fontface = "bold", size = 28, family = "mono")
+
+scree_plot_labeled <- ggdraw(final_plot2) +
+  draw_plot_label("B", x = 0, y = 1, hjust = -0.5, vjust = 1.2, 
+                  fontface = "bold", size = 28, family = "mono")
+
+# Stack vertically with small gap (plot_spacer adds space)
+combined <- pca_plot_labeled / plot_spacer() / scree_plot_labeled + 
+  plot_layout(heights = c(1, 0.05, 1))  # small gap between
+# Show plot
+combined
 ```
 
 ## Run sNMF in LEA
@@ -271,30 +383,24 @@ setwd("~/Quercus_bicolor/")
 lines <- readLines("./data/dinvestigate1_output.txt")
 head(lines, 20)
 lines<-lines[18:length(lines)]
-# Initialize list to hold parsed results
 results <- list()
-# We'll iterate in chunks of 7 lines (6 lines of data + 1 blank)
 i <- 1
 while (i <= length(lines) - 6) {
-  # Skip if the current line is empty
   if (lines[i] == "") {
     i <- i + 1
     next
   }
-  
   # Extract trio
   trio <- unlist(strsplit(lines[i], "\t"))
   P1 <- trio[1]
   P2 <- trio[2]
   P3 <- trio[3]
-  
   # Extract values
   D       <- as.numeric(sub("D=", "", lines[i + 1]))
   f_d     <- as.numeric(sub("f_d=", "", strsplit(lines[i + 2], "\t")[[1]][1]))
   f_dM    <- as.numeric(sub("f_dM=", "", strsplit(lines[i + 3], "\t")[[1]][1]))
   ABBA_p  <- as.numeric(sub("ABBA_KSpval = ", "", lines[i + 4]))
   BABA_p  <- as.numeric(sub("BABA_KSpval = ", "", lines[i + 5]))
-  
   # Save to list
   results[[length(results) + 1]] <- data.frame(
     P1 = P1, P2 = P2, P3 = P3,
@@ -302,7 +408,6 @@ while (i <= length(lines) - 6) {
     ABBA_KSpval = ABBA_p, BABA_KSpval = BABA_p,
     stringsAsFactors = FALSE
   )
-  
   # Move to next block
   i <- i + 7
 }
@@ -890,15 +995,15 @@ map<-map(database= "state", add = T, interior = T, col="grey",lwd=1)
 ```
 
 # Geospatial analysis
-
+## Maxent models for Quercus bicolor
 ```{r eval=FALSE}
 library(dplyr)
 library(terra)
 library(SDMtune)
 library(mapview)
-setwd("~/Quercus_bicolor/geospatial/")
 #get bioclimatic data from https://www.worldclim.org/data/worldclim21.html
 #put in "~/Quercus_bicolor/geospatial/env_data/"
+setwd("~/Quercus_bicolor/geospatial/")
 #assemble occurences and create buffers
 qubi<-read.csv("Qbicolor_occurences.csv")
 qubi<-qubi[qubi$pa==1,]
@@ -928,7 +1033,7 @@ writeVector(merge_buf150, "merge_buf150.shp")
 writeVector(qubi_buf150, "qubi_buf150.shp")
 writeVector(quly_buf150, "quly_buf150.shp")
 
-output_folder <-"~Quercus_bicolor/geospatial/"
+output_folder <-"~/Quercus_bicolor/geospatial/env_data"
 files <- list.files(output_folder, pattern = "\\.tif$", full.names = TRUE)
 bioclim2<-rast(files)
 crs(bioclim)==crs(bioclim2)
@@ -937,6 +1042,7 @@ plot(bioclim2$wc2.1_2.5m_bio_1, )
 ex<-c(-105,-69,20,50)
 bioclimc<-crop(bioclim2,ex)
 plot(bioclimc$wc2.1_2.5m_bio_1)
+
 ##model SWO
 bioclim_qubi<-crop(bioclim, qubi_buf150, mask=TRUE)
 plot(bioclim_qubi$wc2.1_2.5m_bio_1)
@@ -995,13 +1101,17 @@ cat("Training AUC: ", auc(max_final_qubi))
 cat("Testing AUC: ", auc(max_final_qubi, test = qubi_test))
 cat("Training TSS: ", tss(max_final_qubi))
 cat("Testing TSS: ", tss(max_final_qubi, test = qubi_test))
-setwd("D:/data/wc2.1_30s_bio/raw_rasters_touse/QUBI_and_QULY/modeling_outputs")
-getwd()
+
 final_max_modelreport<-modelReport(max_final_qubi, folder="maxmodelreport", test = qubi_test,type = "cloglog",response_curves = TRUE,only_presence = TRUE,jk = TRUE,env = vars, clamp = TRUE, permut = 10,verbose = TRUE)
-#get paleo data
-output_folder <-"D:/data/paleoclimate/"
+```
+## Model hybrid zones using paleoclimate data
+```{r eval=FALSE}
+# get paleo data for the last glacial maximum from https://www.worldclim.org/data/v1.4/paleo1.4.html
+# put in "~/Quercus_bicolor/geospatial/env_data/lgm"
+output_folder <-"~/Quercus_bicolor/geospatial/env_data/lgm"
 files <- list.files(output_folder, pattern = "\\.tif$", full.names = TRUE)
 nontemp<-rast(files)
+#convert temperature to standard units
 pal<-temp/10
 paleo<-c(pal,nontemp)
 
@@ -1016,26 +1126,9 @@ max_predict_qubi_LGM<- SDMtune::predict(object=max_final_qubi, data=paleo, filen
 plot(max_predict_qubi_current)
 plot(max_predict_qubi_LGM)
 
-#get interglacial data
-output_folder <-"D:/data/interglacialclimate/temp"
-list.files(output_folder)
-files <- list.files(output_folder, pattern = "\\.bil$", full.names = TRUE)
-nontemp<-rast(files)
-int<-interglacial/10
-interglacial<-c(int, nontemp)
-plot(interglacial$lig_30s_bio_1)
-crs(interglacial)==crs(bioclimc) #is false proceed with next 2 lines
-interglacial<-project(interglacial, bioclimc, method= 'bilinear', mask=TRUE)
-names(interglacial)<-c("wc2.1_2.5m_bio_1", "wc2.1_2.5m_bio_10", "wc2.1_2.5m_bio_11","wc2.1_2.5m_bio_2" ,"wc2.1_2.5m_bio_3","wc2.1_2.5m_bio_4","wc2.1_2.5m_bio_5","wc2.1_2.5m_bio_6" ,"wc2.1_2.5m_bio_7","wc2.1_2.5m_bio_8","wc2.1_2.5m_bio_9","wc2.1_2.5m_bio_12","wc2.1_2.5m_bio_13", "wc2.1_2.5m_bio_14", "wc2.1_2.5m_bio_15", "wc2.1_2.5m_bio_16", "wc2.1_2.5m_bio_17", "wc2.1_2.5m_bio_18", "wc2.1_2.5m_bio_19")
-plot(interglacial$wc2.1_2.5m_bio_1)
-writeRaster(interglacial,"interglacial_converted.tif", overwrite=TRUE)
-#predict
-setwd()
-max_predict_qubi_IG<- SDMtune::predict(object=max_final_qubi, data=interglacial, filename = "max_predict_qubi_IG.tif", overwrite=TRUE)
-plot(max_predict_qubi_IG)
-
-#get midholocene data
-output_folder <-"D:/data/midholocene/"
+# get midholocene data from https://www.worldclim.org/data/v1.4/paleo1.4.html
+# put in "~/Quercus_bicolor/geospatial/env_data/midhol"
+output_folder <-"~/Quercus_bicolor/geospatial/env_data/midhol"
 list.files(output_folder)
 files <- list.files(output_folder, pattern = "\\.tif$", full.names = TRUE)
 nontemp<-rast(files)
@@ -1121,8 +1214,9 @@ us <- gadm(country = "USA", level = 2, resolution = 2, path=getwd())
 ten<-us[us$NAME_1=="Tennessee"]
 plot(ten, add=TRUE)
 
-#get future climate
-fut<-rast("D:/data/future_climate/wc2.1_30s_bioc_EC-Earth3-Veg_ssp585_2041-2060.tif")
+# get future climate from https://www.worldclim.org/data/cmip6/cmip6_clim2.5m.html (EC-Earth3-Veg)
+# put in "~/Quercus_bicolor/geospatial/env_data/fut"
+fut<-rast("~/Quercus_bicolor/geospatial/env_data/fut/wc2.1_2.5m_bioc_EC-Earth3-Veg_ssp585_2041-2060.tif")
 crs(fut)==crs(bioclimc)
 names(fut)=c("wc2.1_2.5m_bio_1", "wc2.1_2.5m_bio_2",  "wc2.1_2.5m_bio_3",  "wc2.1_2.5m_bio_4",  "wc2.1_2.5m_bio_5", "wc2.1_2.5m_bio_6",  "wc2.1_2.5m_bio_7",  "wc2.1_2.5m_bio_8",  "wc2.1_2.5m_bio_9", "wc2.1_2.5m_bio_10", "wc2.1_2.5m_bio_11", "wc2.1_2.5m_bio_12", "wc2.1_2.5m_bio_13","wc2.1_2.5m_bio_14", "wc2.1_2.5m_bio_15", "wc2.1_2.5m_bio_16", "wc2.1_2.5m_bio_17", "wc2.1_2.5m_bio_18", "wc2.1_2.5m_bio_19" )
 fut<-crop(fut, bioclimc)
@@ -1147,7 +1241,7 @@ cat("Training AUC: ", auc(maxent_allBC_qubi))
 cat("Testing AUC: ", auc(maxent_allBC_qubi, test = qubi_test_all))
 cat("Training TSS: ", tss(maxent_allBC_qubi))
 cat("Testing TSS: ", tss(maxent_allBC_qubi, test = qubi_test_all))
-setwd("D:/data/wc2.1_30s_bio/raw_rasters_touse/QUBI_and_QULY/modeling_outputs")
+
 allBC_max_modelreport<-modelReport(max_allBC_qubi, folder="max_allBC_qubi_modreport", test = qubi_test_all, type = "cloglog",response_curves = TRUE,only_presence = TRUE,jk = TRUE,env = bioclim_qubi, clamp = TRUE, permut = 10,verbose = TRUE)
 
 #test with all bioclim variables quly
@@ -1161,7 +1255,6 @@ cv<-randomFolds(quly_train_all, k=10, only_presence= TRUE)
 #create maxent model with default values
 maxent_allBC_quly<-train("Maxent", quly_train_all, folds=cv, progress=TRUE)
 max_allBC_quly<-combineCV(maxent_allBC_quly)
-setwd("D:/data/wc2.1_30s_bio/raw_rasters_touse/QUBI_and_QULY/modeling_outputs")
 allBC_quly_max_modelreport<-modelReport(max_allBC_quly, folder="max_allBC_quly_modreport", test = quly_test_all,type = "cloglog",response_curves = TRUE,only_presence = TRUE,jk = TRUE,env = bioclim_quly, clamp = TRUE, permut = 10,verbose = TRUE)
 
 
@@ -1190,10 +1283,10 @@ plot(max_predict_allBC_quly_2050)
 
 #get threhsolds (max training sens+spec)
 ths_qubi<-SDMtune::thresholds(model=max_allBC_qubi, test=qubi_test_all)
-write.csv(ths_qubi,"D:/data/wc2.1_30s_bio/raw_rasters_touse/QUBI_and_QULY/modeling_outputs/thresholds_allBC_qubi.csv")
+write.csv(ths_qubi)
 
 ths_quly<-SDMtune::thresholds(model=max_allBC_quly, test=quly_test_all)
-write.csv(ths_quly,"D:/data/wc2.1_30s_bio/raw_rasters_touse/QUBI_and_QULY/modeling_outputs/thresholds_allBC_quly.csv")
+write.csv(ths_quly)
 
 thr_qubi<-max_allBC_qubi@model@results['X10.percentile.training.presence.Cloglog.threshold',1]
 thr_quly<-max_allBC_quly@model@results['X10.percentile.training.presence.Cloglog.threshold',1]
@@ -1209,20 +1302,19 @@ max_predict_allBC_quly_LGM %>% { . > thr_quly } %>% writeRaster(., "QULY_LGM_bin
 max_predict_allBC_quly_IG %>% { . > thr_quly } %>% writeRaster(., "QULY_IG_binary.tif", overwrite=TRUE)
 max_predict_allBC_quly_midhol %>% { . > thr_quly } %>% writeRaster(., "QULY_midhol_binary.tif", overwrite=TRUE)
 max_predict_allBC_quly_2050 %>% { . > thr_quly } %>% writeRaster(., "QULY_2050_binary.tif", overwrite=TRUE)
-
-
-
-
-
+```
+## Plotting hybrid zones
+```{r eval=FALSE}
 # Define colors: # 0 (Neither) = White # 1 (QUBI only) = Blue # 2 (QULY only) = Green # 3 (Both) = Purple
-setwd("D:/data/wc2.1_30s_bio/raw_rasters_touse/QUBI_and_QULY/modeling_outputs")
-colors <- c("white", "blue", "green", "purple")
+colors <- c("white", "cyan", "magenta", "yellow")
 library(terra)
 quly_fut<-rast("QULY_2050_binary.tif")
 qubi_fut<-rast("QUBI_2050_binary.tif")
 
 quly_current<-rast("QULY_current_binary.tif")
 qubi_current<-rast("QUBI_current_binary.tif")
+current_overlap <- qubi_current * 1 + quly_current * 2  
+
 
 quly_midhol<-rast("QULY_midhol_binary.tif")
 qubi_midhol<-rast("QUBI_midhol_binary.tif")
@@ -1240,31 +1332,37 @@ library(terra)
 library(ggplot2)
 library(sf)
 library(geodata)
-df <- as.data.frame(ig_overlap, xy=TRUE)
-colnames(df) <- c("x", "y", "presence")
-# Define color mapping
-color_mapping <- c("0" = "white", "1" = "blue", "2" = "green", "3" = "purple")
+color_mapping <- c("0" = NULL, "1" =  "#FDE725FF", "2" = "#440154FF", "3" = "#21908CFF" )
 # Load US states boundaries from geodata
 us_states <- gadm("USA", level=1, path=tempdir())  # Level 1 = states
 us_sf <- st_as_sf(us_states)
 can<-gadm("Canada", level=0, path=tempdir())
 can_sf <- st_as_sf(can)
-raster_extent <- st_as_sfc(st_bbox(c(xmin=min(df$x), xmax=max(df$x), ymin=min(df$y), ymax=max(df$y)), crs=st_crs(us_sf)))
+raster_extent <- st_as_sfc(st_bbox(c(xmin=-100, xmax=-69, ymin=24, ymax=49), crs=st_crs(us_sf)))
+
+
+
 # Clip US states to raster extent
 can_sf_clipped <- st_crop(can_sf, raster_extent)
 us_sf_clipped <- st_crop(us_sf, raster_extent)
-canusa<-merge(us_sf_clipped,can_sf_clipped)
+
 single_sf <- dplyr::bind_rows(list(us_sf_clipped,can_sf_clipped))
 dissolve_sf <- st_union(single_sf)
-
+GeomRaster$draw_key <- ggplot2::draw_key_polygon
+ig_overlap<-crop(ig_overlap, dissolve_sf)
+df <- as.data.frame(ig_overlap, xy=TRUE)
+colnames(df) <- c("x", "y", "presence")
 ig_overlap_map<-ggplot() +
   geom_raster(data=df, aes(x=x, y=y, fill=factor(presence))) +
-  scale_fill_manual(
+  scale_fill_manual(na.value = "transparent",
     values=color_mapping, 
-    name="Species Presence",
-    labels=c(expression("None"), 
-             expression(italic("Quercus bicolor")), 
-             expression(italic("Quercus lyrata")), 
+    name="",guide = guide_legend(
+      override.aes = list(
+        colour = "black",   # border color (spelled "colour")
+        fill = color_mapping,  # needed for draw_key_polygon()
+        shape = NA)) ,
+    labels=c(expression(italic("Q. bicolor  ")), 
+             expression(italic("Q. lyrata  ")), 
              expression("Hybrid Zone"))
   ) +
   geom_sf(data=us_sf_clipped, fill=NA, color="black", size=0.5) +
@@ -1282,7 +1380,6 @@ ig_overlap_map<-ggplot() +
 
 
 lgm_overlap <- qubi_lgm * 1 + quly_lgm * 2  
-freq(lgm_overlap)
 r_area <- cellSize(lgm_overlap, unit = "km")
 mask_r <- lgm_overlap == 3
 area_hyb <- global(r_area * mask_r, fun = "sum", na.rm = TRUE)
@@ -1292,24 +1389,23 @@ lgm_df<-c(area_hyb, area_tot) %>% as.data.frame()
 colnames(lgm_df)<-c("hybrid_area","total_area_occupied")
 
 
-print(area_3)
-
 lgm_overlap<-crop(lgm_overlap, dissolve_sf)
 df <- as.data.frame(lgm_overlap, xy=TRUE)
 colnames(df) <- c("x", "y", "presence")
-# Define color mapping
 lgm_overlap_map<-ggplot() +
   geom_raster(data=df, aes(x=x, y=y, fill=factor(presence))) +
-  scale_fill_manual(
+  scale_fill_manual(na.value = "transparent",
     values=color_mapping, 
-    name="Species Presence",
-    labels=c(expression("None"), 
-             expression(italic("Quercus bicolor")), 
-             expression(italic("Quercus lyrata")), 
+    name="",guide = guide_legend(
+      override.aes = list(
+        colour = "black",   # border color (spelled "colour")
+        fill = color_mapping,  # needed for draw_key_polygon()
+        shape = NA )),
+    labels=c(expression(italic("Q. bicolor  ")), 
+             expression(italic("Q. lyrata  ")), 
              expression("Hybrid Zone"))
   ) +
   geom_sf(data=us_sf_clipped, fill=NA, color="black", size=0.5) +
-  geom_sf(data=dissolve_sf, fill='white', color="black", size=0.5) +
   coord_sf(xlim=c(min(df$x), max(df$x)), ylim=c(min(df$y), max(df$y))) +
   labs(title="Last Glacial Maximum (~22,000 years BP) Climate", x="Longitude", y="Latitude") +
   theme_minimal()+
@@ -1341,31 +1437,37 @@ area_tot <- global(r_area * mask_r, fun = "sum", na.rm = TRUE)
 current_df<-c(area_hyb, area_tot) %>% as.data.frame() 
 colnames(current_df)<-c("hybrid_area","total_area_occupied")
 
-
+midhol_overlap<-crop(midhol_overlap, dissolve_sf)
 df <- as.data.frame(midhol_overlap, xy=TRUE)
 colnames(df) <- c("x", "y", "presence")
-# Define color mapping
+
+
 midhol_overlap_map<-ggplot() +
   geom_raster(data=df, aes(x=x, y=y, fill=factor(presence))) +
-  scale_fill_manual(
+  scale_fill_manual(na.value = "transparent",
     values=color_mapping, 
-    name="Species Presence",
-    labels=c(expression("None"), 
-             expression(italic("Quercus bicolor")), 
-             expression(italic("Quercus lyrata")), 
+    name="",guide = guide_legend(
+      override.aes = list(
+        colour = "black",   # border color (spelled "colour")
+        fill = color_mapping,  # needed for draw_key_polygon()
+        shape = NA )),
+    labels=c(expression(italic("Q. bicolor  ")), 
+             expression(italic("Q. lyrata  ")), 
              expression("Hybrid Zone"))
   ) +
   geom_sf(data=us_sf_clipped, fill=NA, color="black", size=0.5) +
   coord_sf(xlim=c(min(df$x), max(df$x)), ylim=c(min(df$y), max(df$y))) +
   labs(title="Mid-Holocene (~6,000 years BP) Climate", x="Longitude", y="Latitude") +
-  theme_minimal()+
+  theme_minimal() +
   theme(
-    text = element_text(family="mono"),             # Set all text to monospace
-    title = element_text(family="mono"),            # Monospace for title
-    axis.title = element_text(family="mono"),       # Monospace for axis labels
-    axis.text = element_text(family="mono"),        # Monospace for axis ticks
-    legend.text = element_text(family="mono"), 
-    legend.title = element_text(family="mono")      # Monospace for legend title
+    axis.title.x = element_blank(),
+    legend.position = "bottom",
+    axis.text.x = element_text(size=14),
+    axis.text.y = element_text(size=14),
+    axis.title.y = element_blank(),
+    text = element_text(family = "mono"),
+    legend.text = element_text(family = "mono", size=18),
+    legend.title = element_text(family = "mono")
   )
 
 current_overlap <- qubi_current * 1 + quly_current * 2  
@@ -1378,30 +1480,36 @@ area_tot <- global(r_area * mask_r, fun = "sum", na.rm = TRUE)
 current_df<-c(area_hyb, area_tot) %>% as.data.frame() 
 colnames(current_df)<-c("hybrid_area","total_area_occupied")
 
+current_overlap<-crop(current_overlap, dissolve_sf)
 df <- as.data.frame(current_overlap, xy=TRUE)
 colnames(df) <- c("x", "y", "presence")
 # Define color mapping
 current_overlap_map<-ggplot() +
   geom_raster(data=df, aes(x=x, y=y, fill=factor(presence))) +
-  scale_fill_manual(
+  scale_fill_manual(na.value = "transparent",
     values=color_mapping, 
-    name="Species Presence",
-    labels=c(expression("None"), 
-             expression(italic("Quercus bicolor")), 
-             expression(italic("Quercus lyrata")), 
+    name="",guide = guide_legend(
+      override.aes = list(
+        colour = "black",   # border color (spelled "colour")
+        fill = color_mapping,  # needed for draw_key_polygon()
+        shape = NA )),
+    labels=c(expression(italic("Q. bicolor  ")), 
+             expression(italic("Q. lyrata  ")), 
              expression("Hybrid Zone"))
   ) +
   geom_sf(data=us_sf_clipped, fill=NA, color="black", size=0.5) +
   coord_sf(xlim=c(min(df$x), max(df$x)), ylim=c(min(df$y), max(df$y))) +
   labs(title="1970-2000 Climate", x="Longitude", y="Latitude") +
-  theme_minimal()+
+  theme_minimal() +
   theme(
-    text = element_text(family="mono"),             # Set all text to monospace
-    title = element_text(family="mono"),            # Monospace for title
-    axis.title = element_text(family="mono"),       # Monospace for axis labels
-    axis.text = element_text(family="mono"),        # Monospace for axis ticks
-    legend.text = element_text(family="mono"), 
-    legend.title = element_text(family="mono")      # Monospace for legend title
+    axis.title.x = element_blank(),
+    legend.position = "bottom",
+    axis.text.x = element_text(size=14),
+    axis.text.y = element_text(size=14),
+    axis.title.y = element_blank(),
+    text = element_text(family = "mono"),
+    legend.text = element_text(family = "mono", size=18),
+    legend.title = element_text(family = "mono")
   )
 
 fut_overlap <- qubi_fut * 1 + quly_fut * 2  
@@ -1413,25 +1521,37 @@ area_tot <- global(r_area * mask_r, fun = "sum", na.rm = TRUE)
 fut_df<-c(area_hyb, area_tot) %>% as.data.frame() 
 colnames(fut_df)<-c("hybrid_area","total_area_occupied")
 
+fut_overlap<-crop(fut_overlap, dissolve_sf)
 df <- as.data.frame(fut_overlap, xy=TRUE)
 colnames(df) <- c("x", "y", "presence")
 # Define color mapping
 fut_overlap_map<-ggplot() +
   geom_raster(data=df, aes(x=x, y=y, fill=factor(presence))) +
-  scale_fill_manual(
+  scale_fill_manual(na.value = "transparent",
     values=color_mapping, 
-    name="Species Presence",
-    labels=c(expression("None"), 
-             expression(italic("Quercus bicolor")), 
-             expression(italic("Quercus lyrata")), 
+    name="",guide = guide_legend(
+      override.aes = list(
+        colour = "black",   # border color (spelled "colour")
+        fill = color_mapping,  # needed for draw_key_polygon()
+        shape = NA )),
+    labels=c(expression(italic("Q. bicolor  ")), 
+             expression(italic("Q. lyrata  ")), 
              expression("Hybrid Zone"))
   ) +
   geom_sf(data=us_sf_clipped, fill=NA, color="black", size=0.5) +
   coord_sf(xlim=c(min(df$x), max(df$x)), ylim=c(min(df$y), max(df$y))) +
   labs(title="2050 Climate RCP 8.5", x="Longitude", y="Latitude") +
-  theme_minimal()+
-  theme(text = element_text(family="mono"),title = element_text(family="mono"),axis.title = element_text(family="mono"),axis.text = element_text(family="mono"),legend.text = element_text(family="mono"),legend.title = element_text(family="mono")    
-    )
+  theme_minimal() +
+  theme(
+    axis.title.x = element_blank(),
+    legend.position = "bottom",
+    axis.text.x = element_text(size=14),
+    axis.text.y = element_text(size=14),
+    axis.title.y = element_blank(),
+    text = element_text(family = "mono"),
+    legend.text = element_text(family = "mono", size=18),
+    legend.title = element_text(family = "mono")
+  )
 names<-c("lgm","midhol","current", "fut_df") 
 stats<-rbind(lgm_df,midhol_df,current_df,fut_df) %>% as.data.frame() 
 rownames(stats)<-names
@@ -1440,11 +1560,287 @@ library(patchwork)
 library(ggplot2)
 library(gridExtra)
 library(grid)
-library(lattice)
-plot_combined<-arrangeGrob(lgm_overlap_map, midhol_overlap_map, current_overlap_map, fut_overlap_map, ncol = 2)
-# Save as PNG
+library(cowplot)
 
-ggsave("hybridzone_maps.pdf", plot = plot_combined, width = 13, height = 13, dpi = 800)
+# Shared theme to standardize spacing and margins
+uniform_theme <- theme(plot.margin = margin(10, 10, 10, 10),
+        legend.position = "bottom",
+        axis.ticks = element_line(),
+        axis.title = element_blank(),
+      axis.text.x = element_text(size=14),
+      axis.text.y = element_text(size=14),
+      axis.title.y = element_blank(),
+      text = element_text(family = "mono"),
+      legend.text = element_text(family = "mono", size=24),
+      legend.title = element_text(family = "mono")
+    )
 
-setwd("C:/Users/jpark107/OneDrive - University of Tennessee/Desktop/Genetics_swo")
+
+# Apply theme to all maps
+lgm_overlap_map <- lgm_overlap_map + labs(title = NULL) + uniform_theme
+midhol_overlap_map <- midhol_overlap_map + labs(title = NULL) + uniform_theme
+current_overlap_map <- current_overlap_map + labs(title = NULL) + uniform_theme
+fut_overlap_map <- fut_overlap_map + labs(title = NULL) + uniform_theme
+
+# Combine plots with shared legend
+combined <- (lgm_overlap_map + midhol_overlap_map) /
+  (current_overlap_map + fut_overlap_map) +
+  plot_layout(guides = "collect") &
+  theme(legend.position = "bottom", legend.title=element_text(size=24), legend.text=element_text(size=18),plot.margin = margin(7, 7, 0, 7, unit='mm'))  # spacing between plots
+
+# Convert to grob using patchwork internal function
+combined_grob <- patchwork:::patchworkGrob(combined)
+
+# Add panel labels with cowplot
+final_plot <- ggdraw(combined_grob) +
+  draw_plot_label(
+    label = c("A", "B", "C", "D"),
+    x = c(0.0, 0.48, 0.0, 0.48),   # X positions
+    y = c(1, 1, 0.51, 0.51),     # Y positions
+    size = 36,
+    fontface = "bold",
+    family = "mono"
+  )
+
+# Print final plot
+print(final_plot)
 ```
+# Plot range maps of sympatric oaks
+```{r eval=FALSE}
+library(terra)
+library(geodata)
+library(sf)
+# get range maps for species from https://github.com/wpetry/USTreeAtlas
+# put in "~/Quercus_bicolor/geospatial/env_data/rangemaps"
+
+quma<-vect("~/Quercus_bicolor/geospatial/env_data/rangemaps/quermacr.shp")
+qual<-vect("~/Quercus_bicolor/geospatial/env_data/rangemaps/queralba.shp")
+qumu<-vect("~/Quercus_bicolor/geospatial/env_data/rangemaps/quermueh.shp")
+qust<-vect("~/Quercus_bicolor/geospatial/env_data/rangemaps/querstel.shp")
+crs(qust)<-crs(quma)
+qumo<-vect("~/Quercus_bicolor/geospatial/env_data/rangemaps/querprin.shp")
+qubi<-vect("~/Quercus_bicolor/geospatial/env_data/rangemaps/querbico.shp")
+qumi<-vect("~/Quercus_bicolor/geospatial/env_data/rangemaps/quermich.shp")
+quly<-vect("~/Quercus_bicolor/geospatial/env_data/rangemaps/querlyra.shp")
+
+quly_ig<-rast("QULY_IG_binary.tif")
+qubi_ig<-rast("QUBI_IG_binary.tif")
+ig_overlap <- qubi_ig * 1 + quly_ig * 2  
+us_states <- gadm("USA", level=1, path=tempdir())  # Level 1 = states
+us_sf <- st_as_sf(us_states)
+can<-gadm("Canada", level=0, path=tempdir())
+can_sf <- st_as_sf(can)
+#raster_extent <- st_as_sfc(st_bbox(c(xmin=min(df$x), xmax=max(df$x), ymin=min(df$y), ymax=max(df$y)), crs=st_crs(us_sf)))
+raster_extent <- st_as_sfc(st_bbox(c(xmin=-100, xmax=-69, ymin=24, ymax=49), crs=st_crs(us_sf)))
+# Clip US states to raster extent
+can_sf_clipped <- st_crop(can_sf, raster_extent)
+us_sf_clipped <- st_crop(us_sf, raster_extent)
+single_sf <- dplyr::bind_rows(list(us_sf_clipped,can_sf_clipped))
+dissolve_sf <- st_union(single_sf)
+ig_overlap<-crop(ig_overlap, dissolve_sf)
+df <- as.data.frame(ig_overlap, xy=TRUE)
+colnames(df) <- c("x", "y", "presence")
+
+qubi_sf <- st_as_sf(qubi)
+qubi_map<-ggplot() +
+  geom_sf(data = qubi_sf, fill = "darkseagreen", color = 'black') +
+  
+  # US borders
+  geom_sf(data=us_sf_clipped, fill=NA, color="black", size=0.5) +
+  coord_sf(xlim=c(min(df$x), max(df$x)), ylim=c(min(df$y), max(df$y))) +
+  labs(x="Longitude", y="Latitude") +
+  labs(title="Q. bicolor") +
+  theme_minimal()+
+  theme(
+    text = element_text(family="mono"),             # Set all text to monospace
+    title = element_text(family="mono", face="italic"),            # Monospace for title
+    axis.title = element_text(family="mono"),       # Monospace for axis labels
+    axis.text = element_text(family="mono"),        # Monospace for axis ticks
+    legend.text = element_text(family="mono"), 
+    legend.title = element_text(family="mono")      # Monospace for legend title
+  )
+
+quma_sf <- st_as_sf(quma)
+quma_map<-ggplot() +
+  geom_sf(data = quma_sf, fill = "darkseagreen", color = 'black') +
+  
+  # US borders
+  geom_sf(data=us_sf_clipped, fill=NA, color="black", size=0.5) +
+  coord_sf(xlim=c(min(df$x), max(df$x)), ylim=c(min(df$y), max(df$y))) +
+  labs(x="Longitude", y="Latitude") +
+  theme_minimal()+
+  labs(title="Q. macrocarpa") +
+  theme(
+    text = element_text(family="mono"),             # Set all text to monospace
+    title = element_text(family="mono"),            # Monospace for title
+    axis.title = element_text(family="mono"),       # Monospace for axis labels
+    axis.text = element_text(family="mono"),        # Monospace for axis ticks
+    legend.text = element_text(family="mono"), 
+    legend.title = element_text(family="mono")      # Monospace for legend title
+  )
+
+qumi_sf <- st_as_sf(qumi)
+qumi_map<-ggplot() +
+  geom_sf(data = qumi_sf, fill = "darkseagreen", color = 'black') +
+  
+  # US borders
+  geom_sf(data=us_sf_clipped, fill=NA, color="black", size=0.5) +
+  coord_sf(xlim=c(min(df$x), max(df$x)), ylim=c(min(df$y), max(df$y))) +
+  labs(x="Longitude", y="Latitude") +
+  labs(title="Q. michauxii") +
+  theme_minimal()+
+  theme(
+    text = element_text(family="mono"),             # Set all text to monospace
+    title = element_text(family="mono"),            # Monospace for title
+    axis.title = element_text(family="mono"),       # Monospace for axis labels
+    axis.text = element_text(family="mono"),        # Monospace for axis ticks
+    legend.text = element_text(family="mono"), 
+    legend.title = element_text(family="mono")      # Monospace for legend title
+  )
+
+
+quly_sf <- st_as_sf(quly)
+quly_map<-ggplot() +
+  geom_sf(data = quly_sf, fill = "darkseagreen", color = 'black') +
+  
+  # US borders
+  geom_sf(data=us_sf_clipped, fill=NA, color="black", size=0.5) +
+  coord_sf(xlim=c(min(df$x), max(df$x)), ylim=c(min(df$y), max(df$y))) +
+  labs(x="Longitude", y="Latitude") +
+  theme_minimal()+
+  labs(title="Q. lyrata") +
+  theme(
+    text = element_text(family="mono"),             # Set all text to monospace
+    title = element_text(family="mono"),            # Monospace for title
+    axis.title = element_text(family="mono"),       # Monospace for axis labels
+    axis.text = element_text(family="mono"),        # Monospace for axis ticks
+    legend.text = element_text(family="mono"), 
+    legend.title = element_text(family="mono")      # Monospace for legend title
+  )
+
+qual_sf <- st_as_sf(qual)
+qual_map<-ggplot() +
+  geom_sf(data = qual_sf, fill = "darkseagreen", color = 'black') +
+  
+  # US borders
+  geom_sf(data=us_sf_clipped, fill=NA, color="black", size=0.5) +
+  coord_sf(xlim=c(min(df$x), max(df$x)), ylim=c(min(df$y), max(df$y))) +
+  labs(x="Longitude", y="Latitude") +
+  theme_minimal()+
+  labs(title="Q. alba") +
+  theme(
+    text = element_text(family="mono"),             # Set all text to monospace
+    title = element_text(family="mono"),            # Monospace for title
+    axis.title = element_text(family="mono"),       # Monospace for axis labels
+    axis.text = element_text(family="mono"),        # Monospace for axis ticks
+    legend.text = element_text(family="mono"), 
+    legend.title = element_text(family="mono")      # Monospace for legend title
+  )
+
+qust_sf <- st_as_sf(qust)
+qust_map<-ggplot() +
+  geom_sf(data = qust_sf, fill = "darkseagreen", color = 'black') +
+  
+  # US borders
+  geom_sf(data=us_sf_clipped, fill=NA, color="black", size=0.5) +
+  coord_sf(xlim=c(min(df$x), max(df$x)), ylim=c(min(df$y), max(df$y))) +
+  labs(x="Longitude", y="Latitude") +
+  theme_minimal()+
+  labs(title="Q. stellata") +
+  theme(
+    text = element_text(family="mono"),             # Set all text to monospace
+    title = element_text(family="mono"),            # Monospace for title
+    axis.title = element_text(family="mono"),       # Monospace for axis labels
+    axis.text = element_text(family="mono"),        # Monospace for axis ticks
+    legend.text = element_text(family="mono"), 
+    legend.title = element_text(family="mono")      # Monospace for legend title
+  )
+
+qumu_sf <- st_as_sf(qumu)
+qumu_map<-ggplot() +
+  geom_sf(data = qumu_sf, fill = "darkseagreen", color = 'black') +
+  
+  # US borders
+  geom_sf(data=us_sf_clipped, fill=NA, color="black", size=0.5) +
+  coord_sf(xlim=c(min(df$x), max(df$x)), ylim=c(min(df$y), max(df$y))) +
+  labs(x="Longitude", y="Latitude") +
+  theme_minimal()+
+  labs(title="Q. muehlenbergii") +
+  theme(
+    text = element_text(family="mono"),             # Set all text to monospace
+    title = element_text(family="mono"),            # Monospace for title
+    axis.title = element_text(family="mono"),       # Monospace for axis labels
+    axis.text = element_text(family="mono"),        # Monospace for axis ticks
+    legend.text = element_text(family="mono"), 
+    legend.title = element_text(family="mono")      # Monospace for legend title
+  )
+
+qumo_sf <- st_as_sf(qumo)
+qumo_map<-ggplot() +
+  geom_sf(data = qumo_sf, fill = "darkseagreen", color = 'black') +
+  
+  # US borders
+  geom_sf(data=us_sf_clipped, fill=NA, color="black", size=0.5) +
+  coord_sf(xlim=c(min(df$x), max(df$x)), ylim=c(min(df$y), max(df$y))) +
+  labs(x="Longitude", y="Latitude") +
+  labs(title="Q. montana") +
+  theme_minimal()+
+  theme(
+    text = element_text(family="mono"),             # Set all text to monospace
+    title = element_text(family="mono"),            # Monospace for title
+    axis.title = element_text(family="mono"),       # Monospace for axis labels
+    axis.text = element_text(family="mono"),        # Monospace for axis ticks
+    legend.text = element_text(family="mono"), 
+    legend.title = element_text(family="mono")      # Monospace for legend title
+  )
+
+library(patchwork)
+library(ggplot2)
+library(gridExtra)
+library(grid)
+library(cowplot)
+
+# Shared theme to standardize spacing and margins
+uniform_theme <- theme(
+  plot.margin = margin(10, 10, 10, 10),  # increased margin for spacing
+  plot.title = element_text(size=26, face="italic", hjust=0.5),
+  axis.title = element_blank(),
+  axis.text = element_text(size = 10),
+  axis.ticks = element_line(),
+  legend.position = "bottom"
+)
+
+# Apply theme to all maps
+#qual_map <- qual_map + labs(title = NULL) + uniform_theme
+qual_map <- qual_map + labs(title = "Q. alba") +uniform_theme
+qubi_map <- qubi_map + labs(title = "Q. bicolor") +uniform_theme
+quma_map <- quma_map + labs(title = "Q. macrocarpa") +uniform_theme
+qumi_map <- qumi_map + labs(title = "Q. michauxii") +uniform_theme
+quly_map <- quly_map + labs(title = "Q. lyrata") +uniform_theme
+qust_map <- qust_map + labs(title = "Q. stellata") +uniform_theme
+qumu_map <- qumu_map + labs(title = "Q. muehlenbergii") +uniform_theme
+qumo_map <- qumo_map + labs(title = "Q. montana") +uniform_theme
+# Combine plots with shared legend
+combined <- (
+  qubi_map + quly_map + quma_map + qumi_map +
+    qual_map + qumo_map + qumu_map + qust_map
+) +
+  plot_layout(ncol = 4, guides = "collect") &
+  theme(
+    legend.position = "bottom",
+    legend.title = element_text(size = 24),
+    legend.text = element_text(size = 18),
+    plot.margin = margin(7, 7, 7, 7, unit = 'mm')
+  )
+
+
+final_plot <- ggdraw(patchwork:::patchworkGrob(combined))
+
+# Print final plot
+print(final_plot)
+
+# Save the final plot
+ggsave("figure1.pdf", plot = final_plot, width = 16, height = 8, dpi = 800)
+ggsave("figure1.png", plot = final_plot, width = 16, height = 8, dpi = 800)
+```
+
